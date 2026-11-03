@@ -225,32 +225,73 @@ static void fs_core_process_rows(const fs_lut_t *lut, const void *src, void *dst
     const unsigned int * sp = (const unsigned int *)src + (unsigned int)row0 * words;
     unsigned int * dp = (unsigned int *)dst + (unsigned int)row0 * words;
 
-    int grain = lut->grain_amp;
+    /*
+     * Everything the loop needs is copied out of `lut` first.
+     *
+     * `dp` writes into the caller's buffer, and the compiler cannot prove that
+     * buffer does not overlap `lut`, so with `lut->x` written inline it reloads
+     * the pointer and the value after every single store -- five table loads
+     * and four matrix coefficients per pixel pair, re-read for no reason. The
+     * locals below are loop-invariant by construction, and the output is
+     * unchanged: same arithmetic, same order.
+     */
+    const unsigned char *curve = lut->curve;
+    const unsigned char *sat_t = lut->sat;
+    const short *cb_t = lut->cb_off;
+    const short *cr_t = lut->cr_off;
+    const int m0 = lut->matrix[0], m1 = lut->matrix[1];
+    const int m2 = lut->matrix[2], m3 = lut->matrix[3];
+    const int grain = lut->grain_amp;
 
     for (int y = row0; y < row1; y++)
     {
-        for (int i = 0; i < words; i++)
+        if (!grain)
         {
-            unsigned int px = sp[i];
-
-            int u  = fs_chroma_signed(px);
-            int ya = (px >>  8) & 0xFF;
-            int v  = fs_chroma_signed(px >> 16);
-            int yb = (px >> 24) & 0xFF;
-
-            int oa = lut->curve[ya];
-            int ob = lut->curve[yb];
-            int ym = (oa + ob) >> 1;
-
-            int nu = (lut->matrix[0] * u + lut->matrix[1] * v) >> 8;
-            int nv = (lut->matrix[2] * u + lut->matrix[3] * v) >> 8;
-
-            int sat = lut->sat[ym];
-            nu = ((nu * sat) >> 7) + lut->cb_off[ym];
-            nv = ((nv * sat) >> 7) + lut->cr_off[ym];
-
-            if (grain)
+            for (int i = 0; i < words; i++)
             {
+                unsigned int px = sp[i];
+
+                int u  = fs_chroma_signed(px);
+                int ya = (px >>  8) & 0xFF;
+                int v  = fs_chroma_signed(px >> 16);
+                int yb = (px >> 24) & 0xFF;
+
+                int oa = curve[ya];
+                int ob = curve[yb];
+                int ym = (oa + ob) >> 1;
+
+                int nu = ((m0 * u + m1 * v) >> 8);
+                int nv = ((m2 * u + m3 * v) >> 8);
+
+                int sat = sat_t[ym];
+                nu = ((nu * sat) >> 7) + cb_t[ym];
+                nv = ((nv * sat) >> 7) + cr_t[ym];
+
+                dp[i] = fs_pack_px(nu, oa, nv, ob);
+            }
+        }
+        else
+        {
+            for (int i = 0; i < words; i++)
+            {
+                unsigned int px = sp[i];
+
+                int u  = fs_chroma_signed(px);
+                int ya = (px >>  8) & 0xFF;
+                int v  = fs_chroma_signed(px >> 16);
+                int yb = (px >> 24) & 0xFF;
+
+                int oa = curve[ya];
+                int ob = curve[yb];
+                int ym = (oa + ob) >> 1;
+
+                int nu = ((m0 * u + m1 * v) >> 8);
+                int nv = ((m2 * u + m3 * v) >> 8);
+
+                int sat = sat_t[ym];
+                nu = ((nu * sat) >> 7) + cb_t[ym];
+                nv = ((nv * sat) >> 7) + cr_t[ym];
+
                 /* xorshift32, independent samples for both pixels in the 4:2:2 pair */
                 rnd ^= rnd << 13;
                 rnd ^= rnd >> 17;
@@ -259,9 +300,9 @@ static void fs_core_process_rows(const fs_lut_t *lut, const void *src, void *dst
                 int g1 = (((int)((rnd >> 8) & 0xFF) - 128) * grain) >> 7;
                 oa = fs_clamp_i(oa + g0, 0, 255);
                 ob = fs_clamp_i(ob + g1, 0, 255);
-            }
 
-            dp[i] = fs_pack_px(nu, oa, nv, ob);
+                dp[i] = fs_pack_px(nu, oa, nv, ob);
+            }
         }
 
         sp += words;

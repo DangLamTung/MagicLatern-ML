@@ -183,9 +183,16 @@ static CONFIG_INT("film.sim.level", film_sim_level, FS_LEVEL_GRADE);
  * all) and a cfg key that graded on top of a stock style (neutralcap=1,
  * capture=0) were both reachable before this.
  */
+/* film_sim_level comes from the cfg file, where nothing clamps it; the menu
+ * does. A level of 0 or 7 used to arm the in-shutter grade and still let the
+ * develop path treat the frame as "develop it", which grades twice. */
+static int fs_level(void) {
+  return fs_clamp_i(film_sim_level, FS_LEVEL_STYLE, FS_LEVEL_RAW);
+}
+
 static int fs_grade_in_shutter(void) {
   return (film_sim_capture || film_sim_neutralcap) &&
-         film_sim_level != FS_LEVEL_STYLE;
+         fs_level() != FS_LEVEL_STYLE;
 }
 
 /*
@@ -260,6 +267,10 @@ static volatile uint32_t fs_stat_junk_keys = 0;
 static volatile int fs_stat_last_ms = 0;
 static volatile int fs_stat_max_ms = 0;
 static volatile int fs_stat_copy_ms = 0;
+/* Split of the LiveView pass: copying the source costs one thing, the per-pixel
+ * look another. Without both numbers in the log, "LiveView is slow" gets
+ * guessed at instead of measured. */
+static volatile int fs_stat_grade_ms = 0;
 /* One-frame capture for the LV dump: the filter fills these, the task writes
  * them. Nothing else may read a LiveView plane while Canon still owns it. */
 static volatile int fs_dump_want = 0;
@@ -1005,8 +1016,13 @@ static void fs_aspect_bars(void *dst, int pitch, int row0, int row1) {
   int box_w = (active * den) / num;
   if (box_w <= 0 || box_w >= width_px)
     return;
-  int left = (width_px - box_w) / 2;
-  int right = left + box_w;
+  /* Even pixel boundaries, because a UYVY word holds the chroma of two pixels:
+   * an odd edge zeroes the U of one pair and leaves its V, which paints a
+   * one-column colour error down the bar. 9:16 lands on left = 225 uncorrected. */
+  int left = ((width_px - box_w) / 2) & ~1;
+  int right = (left + box_w + 1) & ~1;
+  if (right > width_px)
+    right = width_px;
   for (int y = row0; y < row1; y++) {
     unsigned char *r = (unsigned char *)dst + (size_t)y * pitch;
     if (left > 0)
@@ -1035,6 +1051,7 @@ static void FAST fs_process_frame(void *src, void *dst) {
 
   int t0 = get_ms_clock();
   int copy_ms = 0;
+  int grade_ms = 0;
 
   /*
    * Grade a copy, not Canon's buffer, and copy it a band at a time.
@@ -1097,38 +1114,58 @@ static void FAST fs_process_frame(void *src, void *dst) {
      * 0x5F227800 with bit 30 cleared, dst is CACHEABLE(display_filter_buffer)),
      * so this is not a cache fix -- the copy is only about coherence.
      */
-    size_t total = (size_t)pitch * (size_t)height;
+    /*
+     * A band at a time, not the whole plane: copy 16 rows, grade those 16 rows,
+     * next band. The copy still costs the same traffic, but the grade then reads
+     * 23 KB that are still in L1 instead of walking 691 KB that has already
+     * been evicted -- and the window in which Canon can rewrite the source
+     * shrinks from a whole frame to one band, which is the tearing fix the
+     * comment above asks for. The buffer itself shrinks from 691 KB of the
+     * temporary pool to 23 KB.
+     */
+    const int band_rows = 16;
+    size_t band = (size_t)pitch * (size_t)band_rows;
 
     if (!fs_snap && !fs_snap_failed) {
-      fs_snap = tmp_malloc(total);
-      fs_snap_size = fs_snap ? total : 0;
+      fs_snap = tmp_malloc(band);
+      fs_snap_size = fs_snap ? band : 0;
       if (!fs_snap) {
         fs_snap_failed = 1;
-        fs_log("lv: no memory for the %d byte frame copy; grading Canon's "
+        fs_log("lv: no memory for the %d byte band copy; grading Canon's "
                "buffer directly (can read a half-written frame)",
-               (int)total);
+               (int)band);
         fs_log_flush();
       }
-    } else if (fs_snap && fs_snap_size < total) {
+    } else if (fs_snap && fs_snap_size < band) {
       /* the panel geometry changed under us (movie mode, HDMI) */
       free(fs_snap);
-      fs_snap = tmp_malloc(total);
-      fs_snap_size = fs_snap ? total : 0;
+      fs_snap = tmp_malloc(band);
+      fs_snap_size = fs_snap ? band : 0;
     }
 
-    if (fs_snap && fs_snap_size >= total) {
-      uint32_t tc = get_ms_clock();
-      memcpy(fs_snap, src, total);
-      copy_ms += get_ms_clock() - tc;
-      fs_core_process_rows(&fs_lut, fs_snap, dst, pitch, row0, row1, &fs_rnd);
+    if (fs_snap && fs_snap_size >= band) {
+      for (int y = row0; y < row1; y += band_rows) {
+        int n = (row1 - y < band_rows) ? row1 - y : band_rows;
+        uint32_t tc = get_ms_clock();
+        memcpy(fs_snap, (const char *)src + (size_t)y * pitch,
+               (size_t)n * pitch);
+        copy_ms += get_ms_clock() - tc;
+        tc = get_ms_clock();
+        fs_core_process_rows(&fs_lut, fs_snap,
+                             (char *)dst + (size_t)y * pitch, pitch, 0, n,
+                             &fs_rnd);
+        grade_ms += get_ms_clock() - tc;
+      }
       if (row0 > 0)
-        memcpy(dst, fs_snap, (size_t)row0 * pitch);
+        memcpy(dst, src, (size_t)row0 * pitch);
       if (row1 < height)
         memcpy((char *)dst + (size_t)row1 * pitch,
-               (const char *)fs_snap + (size_t)row1 * pitch,
+               (const char *)src + (size_t)row1 * pitch,
                (size_t)(height - row1) * pitch);
     } else {
+      uint32_t tg = get_ms_clock();
       fs_core_process_rows(&fs_lut, src, dst, pitch, row0, row1, &fs_rnd);
+      grade_ms += get_ms_clock() - tg;
       if (row0 > 0)
         memcpy(dst, src, (size_t)row0 * pitch);
       if (row1 < height)
@@ -1159,6 +1196,7 @@ static void FAST fs_process_frame(void *src, void *dst) {
   if (dt < 0)
     dt = 0;
   fs_stat_copy_ms = copy_ms;
+  fs_stat_grade_ms = grade_ms;
 
   uint32_t fnum = ++fs_stat_frames;
   fs_stat_last_ms = dt;
@@ -1171,12 +1209,15 @@ static void FAST fs_process_frame(void *src, void *dst) {
   fs_stat_row0 = row0;
   fs_stat_row1 = row1;
 
-  if (film_sim_dbglog && (fnum == 1 || (fnum % 120) == 0)) {
+  /* One line per boot even with dbglog off: "LiveView is slow" is then a
+   * measurement in the log instead of a guess, and a single write costs
+   * nothing. dbglog turns it into a running trace. */
+  if (fnum == 120 || (film_sim_dbglog && (fnum % 120) == 0)) {
     fs_log("lv_frame #%d: src=0x%08x dst=0x%08x %dx%d rows=%d..%d copy=%dms "
-           "dt=%dms (max=%dms, skipped=%d)",
+           "grade=%dms dt=%dms (max=%dms, skipped=%d)",
            (int)fnum, (unsigned)src, (unsigned)dst, pitch / 2, height, row0,
-           row1, (int)fs_stat_copy_ms, dt, fs_stat_max_ms,
-           (int)fs_stat_skipped);
+           row1, (int)fs_stat_copy_ms, (int)fs_stat_grade_ms, dt,
+           fs_stat_max_ms, (int)fs_stat_skipped);
   }
 }
 
@@ -4132,7 +4173,7 @@ static void fs_develop_run(void) {
    * re-grading that JPEG would apply the look twice, which is the mistake this
    * level exists to avoid.
    */
-  if (film_sim_level == FS_LEVEL_STYLE) {
+  if (fs_level() == FS_LEVEL_STYLE) {
     const char *photo1 =
         (dcim_photo_count > 0) ? dcim_photo_list[dcim_photo_index] : "(none)";
     fs_log("develop: level 1 - look is in the captured JPEG, nothing to do");
@@ -4290,7 +4331,7 @@ static void fs_develop_run(void) {
   se_cam_set_pad32(film_sim_pad);
   se_cam_set_strength(film_sim_strength);
   se_cam_set_satboost(film_sim_satboost);
-  if (film_sim_level == FS_LEVEL_RAW) {
+  if (fs_level() == FS_LEVEL_RAW) {
     dev_err = se_cam_develop_raw(cr2, stk, tmp, 2, fs_bath_progress,
                                  fs_develop_note, NULL);
     if (dev_err != SE_OK) {

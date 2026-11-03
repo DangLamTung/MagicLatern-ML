@@ -68,6 +68,9 @@ static uint32_t fs_hook_ms = 0;   /* when the hook last ran, for save timing */
  * reads the frame. If the write-back is ever wrong the look simply will not
  * reach the JPEG, which the per-shot yuvcap/diag lines already make visible.
  */
+/* Set by every grade, not latched: this value is printed in the per-shot
+ * "yuvcap:" line, so it has to describe the most recent pass. Latched, one
+ * shot that used the alias made every later line claim the same. */
 static int fs_dcache_used = 0;
 
 static void fs_dcache_clean(void *p, uint32_t len)
@@ -100,11 +103,9 @@ static uint32_t fs_yuv_grade_cached(void *buf, int width, int rows, int stride)
     /* 0x40000000-0x7FFFFFFF is the DRAM window; inside it CACHEABLE() is the
      * same RAM with bit 30 cleared. Outside it (ROM, low RAM) the pointer is
      * left alone -- clearing bit 30 there would point at something else. */
-    if (ba >= 0x40000000u && ba < 0x80000000u) {
+    if (ba >= 0x40000000u && ba < 0x80000000u)
         gp = (unsigned char *)CACHEABLE(buf);
-        if (gp != (unsigned char *)buf)
-            fs_dcache_used = 1;
-    }
+    fs_dcache_used = (gp != (unsigned char *)buf);
     ms = fs_yuvlook_apply(gp, width, rows, stride);
     if (gp != (unsigned char *)buf)
         fs_dcache_clean(gp, (uint32_t)rows * stride);

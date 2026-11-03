@@ -3187,9 +3187,35 @@ void defish_draw_play()
 #ifdef CONFIG_DISPLAY_FILTERS
 
 #ifdef CONFIG_CAN_REDIRECT_DISPLAY_BUFFER_EASILY
-static void* display_filter_buffer_unaligned = 0;
-static void* display_filter_buffer = 0;
+/*
+ * Two output buffers, not one.
+ *
+ * With a single buffer the filter wrote the next frame into the very buffer the
+ * panel was scanning out, so every frame tore: the visible seam was wherever
+ * the CPU happened to be when the LCD read that line. Double buffering is the
+ * standard cure -- write the frame that is NOT on screen, then point the
+ * display at it once it is complete (display_filter_show flips per processed
+ * frame, which is also what keeps Canon from taking the display back).
+ */
+static void* display_filter_buffer_unaligned[2] = {0, 0};
+static void* display_filter_buffer[2] = {0, 0};
 static void* last_canon_buffer = 0;
+static volatile int display_filter_show = 0;
+static volatile int display_filter_written = 0;
+
+/*
+ * Called by a filter once it has really written dest.
+ *
+ * The display may only be moved to a buffer that holds a finished frame. The
+ * step below used to flip unconditionally, so a filter that deliberately skips
+ * a frame (the rate limiter in film_sim, or defishing on odd frames) had the
+ * panel moved onto the *other* buffer, which still held a frame from two ticks
+ * ago -- an alternation between two different pictures, i.e. flicker.
+ */
+void display_filter_mark_written()
+{
+    display_filter_written = 1;
+}
 #endif
 
 static int display_filter_valid_image = 0;
@@ -3227,8 +3253,13 @@ void display_filter_get_buffers(uint32_t** src_buf, uint32_t** dst_buf)
     if (current != prev)
         buff = prev;
     prev = current;
+#ifdef CONFIG_QEMU
+    if (!buff)
+        buff = (void*)b1;
+#endif
     *src_buf = buff;
-    *dst_buf = CACHEABLE(display_filter_buffer);
+    /* write into the buffer the panel is not showing */
+    *dst_buf = CACHEABLE(display_filter_buffer[display_filter_show ^ 1]);
 #else // just use some reasonable defaults that won't crash the camera
     *src_buf = CACHEABLE(YUV422_LV_BUFFER_1);
     *dst_buf = CACHEABLE(YUV422_LV_BUFFER_2);
@@ -3253,7 +3284,9 @@ int display_filter_enabled()
     
     int fp = focus_peaking_as_display_filter();
     if (!(defish_preview || anamorphic_preview || fp || mdf)) return 0;
+    #ifndef CONFIG_QEMU
     if (!zebra_should_run()) return 0;
+    #endif
     if (should_draw_zoom_overlay()) return 0; // not enough CPU power to run MZ and filters at the same time
     
     return fp ? 2 : 1;
@@ -3333,16 +3366,19 @@ int display_filter_lv_vsync(int old_state, int x, int input, int z, int t)
     }
 #elif defined(CONFIG_CAN_REDIRECT_DISPLAY_BUFFER_EASILY) // all new cameras should work with this method
 
-    if (!display_filter_buffer) return CBR_RET_CONTINUE;
+    if (!display_filter_buffer[0]) return CBR_RET_CONTINUE;
     if (!display_filter_valid_image) return CBR_RET_CONTINUE;
     if (!display_filter_enabled()) { display_filter_valid_image = 0;  return CBR_RET_CONTINUE; }
     
     /* save the old buffer (to restore it when turning off display filters) */
     void* current_buffer = (void*) YUV422_LV_BUFFER_DISPLAY_ADDR;
-    if (current_buffer != display_filter_buffer) last_canon_buffer = current_buffer;
+    if (current_buffer != display_filter_buffer[display_filter_show]) last_canon_buffer = current_buffer;
     
     /* switch the displayed buffer to our filtered image */
-    YUV422_LV_BUFFER_DISPLAY_ADDR = (uint32_t) display_filter_buffer;
+    YUV422_LV_BUFFER_DISPLAY_ADDR = (uint32_t) display_filter_buffer[display_filter_show];
+#ifdef CONFIG_QEMU
+    MEM(0xC0F140E0) = (uint32_t) display_filter_buffer[display_filter_show];
+#endif
 #endif
     return CBR_RET_STOP;
 }
@@ -3354,26 +3390,46 @@ void display_filter_step(int k)
     {
         #ifdef CONFIG_CAN_REDIRECT_DISPLAY_BUFFER_EASILY
         /* for new cameras: if there are no more display filters active, free the output buffer */
-        if (display_filter_buffer)
+        if (display_filter_buffer[0])
         {
-            if (YUV422_LV_BUFFER_DISPLAY_ADDR == (uint32_t) display_filter_buffer)
+            if (YUV422_LV_BUFFER_DISPLAY_ADDR == (uint32_t) display_filter_buffer[0] ||
+                YUV422_LV_BUFFER_DISPLAY_ADDR == (uint32_t) display_filter_buffer[1])
             {
                 YUV422_LV_BUFFER_DISPLAY_ADDR = (uint32_t) last_canon_buffer;
+#ifdef CONFIG_QEMU
+                MEM(0xC0F140E0) = (uint32_t) last_canon_buffer;
+#endif
             }
-            free(display_filter_buffer_unaligned);
-            display_filter_buffer = 0;
+            free(display_filter_buffer_unaligned[0]);
+            free(display_filter_buffer_unaligned[1]);
+            display_filter_buffer_unaligned[0] = display_filter_buffer_unaligned[1] = 0;
+            display_filter_buffer[0] = display_filter_buffer[1] = 0;
+            display_filter_show = 0;
         }
         #endif
         return;
     }
     
     #ifdef CONFIG_CAN_REDIRECT_DISPLAY_BUFFER_EASILY
-    if (!display_filter_buffer)
+    if (!display_filter_buffer[0])
     {
-        /* for new cameras: when you enable a display filter, allocate the output buffer */
+        /* for new cameras: when you enable a display filter, allocate the output
+         * buffers (two, see above) */
         /* some routines (e.g. defishing) use 64-bit operations, so allocate a bit more and align the buffer */
-        display_filter_buffer_unaligned = malloc(720*480*2 + 32);
-        display_filter_buffer = ALIGN64SUP(display_filter_buffer_unaligned);
+        display_filter_buffer_unaligned[0] = malloc(720*480*2 + 32);
+        display_filter_buffer[0] = ALIGN64SUP(display_filter_buffer_unaligned[0]);
+        display_filter_buffer_unaligned[1] = malloc(720*480*2 + 32);
+        display_filter_buffer[1] = ALIGN64SUP(display_filter_buffer_unaligned[1]);
+        if (!display_filter_buffer[0] || !display_filter_buffer[1])
+        {
+            /* One allocator run short is not a reason to write to address 0:
+             * give the memory back and leave the filters off. */
+            free(display_filter_buffer_unaligned[0]);
+            free(display_filter_buffer_unaligned[1]);
+            display_filter_buffer_unaligned[0] = display_filter_buffer_unaligned[1] = 0;
+            display_filter_buffer[0] = display_filter_buffer[1] = 0;
+            return;
+        }
     }
     #endif
     
@@ -3381,9 +3437,13 @@ void display_filter_step(int k)
     
     //~ if (!HALFSHUTTER_PRESSED) return;
     
+    display_filter_written = 0;
+
     #ifdef CONFIG_MODULES
     if (module_display_filter_update())
     {
+        /* the module decides: it calls display_filter_mark_written() when it
+         * has filled dest, and stays silent when it skips the frame */
     }
     else
     #endif
@@ -3393,6 +3453,7 @@ void display_filter_step(int k)
     {
         if (k % 2 == 0)
             BMP_LOCK( if (lv) defish_draw_lv_color(); )
+        display_filter_written = 1;
     } else
     #endif
     
@@ -3401,6 +3462,7 @@ void display_filter_step(int k)
     {
         if (k % 1 == 0)
             BMP_LOCK( if (lv) anamorphic_squeeze(); )
+        display_filter_written = 1;
     } else
     #endif
     
@@ -3409,12 +3471,41 @@ void display_filter_step(int k)
     {
         if (k % 1 == 0)
             BMP_LOCK( if (lv) peak_disp_filter(); )
+        display_filter_written = 1;
     } else
     #endif
     {
     }
     
     display_filter_valid_image = 1;
+
+/*
+ * Point the display at the filtered frame HERE, once per processed frame.
+ *
+ * It used to be done only in display_filter_lv_vsync(), which runs when the GUI
+ * state changes -- not once per frame. On a real body Canon re-points
+ * YUV422_LV_BUFFER_DISPLAY_ADDR at its own buffer for every new LiveView frame,
+ * so the panel alternated between the graded frame and an ungraded one: a
+ * visible flicker at the sensor rate. FILMSIM's log caught the alternation
+ * directly (lvwatch vram flipping between the module's buffer and Canon's).
+ *
+ * The QEMU build already did this inline, which is why the emulator never showed
+ * the problem.
+ */
+#if defined(CONFIG_CAN_REDIRECT_DISPLAY_BUFFER_EASILY)
+    if (display_filter_buffer[0] && display_filter_written)
+    {
+        /* The filter has finished writing the off-screen buffer; show it. */
+        display_filter_show ^= 1;
+        void* current_buffer = (void*) YUV422_LV_BUFFER_DISPLAY_ADDR;
+        if (current_buffer != display_filter_buffer[display_filter_show])
+            last_canon_buffer = current_buffer;
+        YUV422_LV_BUFFER_DISPLAY_ADDR = (uint32_t) display_filter_buffer[display_filter_show];
+        #ifdef CONFIG_QEMU
+        MEM(0xC0F140E0) = (uint32_t) display_filter_buffer[display_filter_show];
+        #endif
+    }
+#endif
 }
 #endif
 

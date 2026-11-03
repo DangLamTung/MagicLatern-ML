@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<film>
+    <name>Portra 400</name>
+    <code>P400</code>
+    <brand>Kodak</brand>
+    <type>Color Negative</type>
+    <base>0x84</base>
+    <iso>400</iso>
+    <raw_iso>0x58</raw_iso>
+    <contrast>0</contrast>
+    <sharpness>1</sharpness>
+    <saturation>1</saturation>
+    <tone>0</tone>
+    <kelvin>5200</kelvin>
+    <wbs_ba>2</wbs_ba>
+    <wbs_gm>1</wbs_gm>
+    <mono>0</mono>
+    <lut>ML/DATA/PORTRA400.CUB</lut>
+    <description>The wedding film: warm skin, muted greens, soft highlights.</description>
+</film>

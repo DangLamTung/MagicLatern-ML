@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<film>
+    <name>XP2 Super</name>
+    <code>XP2</code>
+    <brand>Ilford</brand>
+    <type>Black & White</type>
+    <base>0x86</base>
+    <iso>400</iso>
+    <raw_iso>0x58</raw_iso>
+    <contrast>1</contrast>
+    <sharpness>2</sharpness>
+    <saturation>0</saturation>
+    <tone>0</tone>
+    <kelvin>5500</kelvin>
+    <wbs_ba>0</wbs_ba>
+    <wbs_gm>0</wbs_gm>
+    <mono>1</mono>
+    <lut>ML/DATA/XP2.CUB</lut>
+    <description>Very fine and sharp, bright highlights, forgiving.</description>
+</film>

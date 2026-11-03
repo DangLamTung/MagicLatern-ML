@@ -66,6 +66,14 @@
 //#define YUV422_HD_BUFFER_2 0x4ee00000 //Also 0x4f000000 in Logs
 //#define YUV422_HD_BUFFER_2 0x4f000000 //Also 0x4f000000 in Logs
 
+/* Memory-mapped flash, as modelled by qemu-eos' 6D machine (rom0 8 MB at
+ * 0xF0000000, rom1 16 MB at 0xF8000000).  Enables Debug -> "Dump ROM and RAM",
+ * which is what qemu-eos needs to boot this body.  Not verified on hardware. */
+#define ROM0_ADDR 0xF0000000
+#define ROM0_SIZE 0x00800000
+#define ROM1_ADDR 0xF8000000
+#define ROM1_SIZE 0x01000000
+
 
 // see "focusinfo" and Wiki:Struct_Guessing
 #define FOCUS_CONFIRMATION (*(int*)0x786B8)
@@ -250,7 +258,12 @@ Output size: 5496 x 3670
 #define ARROW_MODE_TOGGLE_KEY "Foc Pnts"
 
 #define DISPLAY_STATEOBJ (*(struct state_object **)0x755A0)
+#ifdef CONFIG_QEMU
+extern int get_display_is_on_6D(void);
+#define DISPLAY_IS_ON get_display_is_on_6D()
+#else
 #define DISPLAY_IS_ON (DISPLAY_STATEOBJ->current_state != 0)
+#endif
 
 #define VIDEO_PARAMETERS_SRC_3 MEM(0x76D50) //76cfc
 #define FRAME_ISO (*(uint8_t*)(VIDEO_PARAMETERS_SRC_3+0))

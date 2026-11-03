@@ -30,8 +30,20 @@ void picstyle_change_for_rec(int rec);
 
 
 #if defined(FEATURE_PICSTYLE) || defined(MODULE)
-// Getters for params in active picture style
+// Getters and setters for params in active picture style
 // Those are available for modules too.
+
+/* flavor slot introspection, see the capture in picstyle.c */
+extern uint32_t picstyle_flavor_len[6];
+#define PICSTYLE_BLOB_SIZE 16704
+extern uint32_t picstyle_blob_len;
+extern int picstyle_blob_slot;
+extern volatile uint32_t picstyle_blob_seq;
+/* full copies of User Def 1 and 2: index 0 = User 1, 1 = User 2 */
+extern unsigned char picstyle_slot_blob[2][PICSTYLE_BLOB_SIZE];
+extern uint32_t picstyle_slot_len[2];
+extern volatile uint32_t picstyle_slot_seq[2];
+extern unsigned char picstyle_flavor_head[6][64];
 
 const char * picstyle_get_current_name(void);
 int picstyle_get_current_sharpness(void);
@@ -40,6 +52,11 @@ int picstyle_get_current_saturation(void);
 int picstyle_get_current_color_tone(void);
 int picstyle_get_current_sharpness_fineness(void);
 int picstyle_get_current_sharpnesst_threshold(void);
+
+void picstyle_set_current_sharpness(int value);
+void picstyle_set_current_contrast(int value);
+void picstyle_set_current_saturation(int value);
+void picstyle_set_current_color_tone(int value);
 #endif // defined(FEATURE_PICSTYLE) || defined(MODULE)
 
 #endif // _picstyle_h_

@@ -5517,6 +5517,7 @@ menu_init( void )
     menu_find_by_name( "Shoot",     ICON_ML_SHOOT   );
     menu_find_by_name( "Focus",     ICON_ML_FOCUS   );
     menu_find_by_name( "Display",   ICON_ML_DISPLAY );
+    menu_find_by_name( "Film",      ICON_ML_OVERLAY );
     menu_find_by_name( "Prefs",     ICON_ML_PREFS   );
     menu_find_by_name( "Scripts",   ICON_ML_SCRIPT  );
     menu_find_by_name( "Games",     ICON_ML_GAMES  );

@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<film>
+    <name>Pro 400H</name>
+    <code>400H</code>
+    <brand>Fujifilm</brand>
+    <type>Color Negative</type>
+    <base>0x84</base>
+    <iso>400</iso>
+    <raw_iso>0x58</raw_iso>
+    <contrast>1</contrast>
+    <sharpness>1</sharpness>
+    <saturation>1</saturation>
+    <tone>0</tone>
+    <kelvin>4900</kelvin>
+    <wbs_ba>1</wbs_ba>
+    <wbs_gm>1</wbs_gm>
+    <mono>0</mono>
+    <lut>ML/DATA/PRO400H.CUB</lut>
+    <description>Pastel and airy, greens towards mint. Overexpose +1.</description>
+</film>

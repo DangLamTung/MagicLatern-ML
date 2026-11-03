@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<film>
+    <name>Color 800</name>
+    <code>LOMO</code>
+    <brand>Lomography</brand>
+    <type>Color Negative</type>
+    <base>0x81</base>
+    <iso>800</iso>
+    <raw_iso>0x60</raw_iso>
+    <contrast>1</contrast>
+    <sharpness>3</sharpness>
+    <saturation>2</saturation>
+    <tone>0</tone>
+    <kelvin>5800</kelvin>
+    <wbs_ba>1</wbs_ba>
+    <wbs_gm>0</wbs_gm>
+    <mono>0</mono>
+    <lut>ML/DATA/LOMO800.CUB</lut>
+    <description>Vibrant, with a red lean. Lomo, literally.</description>
+</film>

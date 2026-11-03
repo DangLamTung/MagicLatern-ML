@@ -292,23 +292,93 @@ PROP_HANDLER(PROP_PICSTYLE_SETTINGS_FINEDETAIL)
 // and it doesn't matter if .pf2 was registered in the slot or not.
 // buf + 0 has some unknown value (eg CineStyle has 0x844148).
 // Style name starts at buf + 4. Max string len unknown.
+/*
+ * The flavor block is the closest thing to the .pf2 payload the camera
+ * exposes to ML.  Keep its size and first bytes so a module can report what
+ * is actually there (film_sim's PS Probe does exactly that).
+ */
+uint32_t picstyle_flavor_len[6];
+unsigned char picstyle_flavor_head[6][64];
+
+/* Full flavor blob, so a module can back a slot up before writing to it. */
+#define PICSTYLE_BLOB_SIZE 16704
+uint32_t picstyle_blob_len;
+int picstyle_blob_slot = -1;
+volatile uint32_t picstyle_blob_seq;
+
+/*
+ * Full copies of User Def 1 and 2.
+ *
+ * The camera delivers all three flavour blobs during its own boot, before any
+ * ML module is loaded (measured on a 6D: everything has arrived by the time
+ * film_sim_init runs at ~713 ms).  No module can therefore observe them, and a
+ * single latest-push buffer leaves only User 3.  The core has to keep them.
+ *
+ * Two slots is the entire memory budget: this build must keep _bss_end below
+ * 0x4E0000 or the camera will not boot, and three slots overflow it.  User 3
+ * is deliberately not kept.
+ */
+unsigned char picstyle_slot_blob[2][PICSTYLE_BLOB_SIZE];
+uint32_t picstyle_slot_len[2];
+volatile uint32_t picstyle_slot_seq[2];
+
+static void picstyle_flavor_capture(int slot, unsigned len, uint32_t * buf)
+{
+    if (slot < 0 || slot >= 6) return;
+    picstyle_flavor_len[slot] = len;
+    unsigned n = len > 64 ? 64 : len;
+    memcpy(picstyle_flavor_head[slot], buf, n);
+    picstyle_flavor_head[slot][63] = 0; /* guarantee NUL-termination for name logging */
+
+    /*
+     * The three real slots are 0, 2 and 4 (User Def 1, 2, 3) and carry the
+     * full 16,704-byte payload.  See picstyle_slot_blob above for why User 1
+     * and User 2 are kept separately and User 3 is not.
+     */
+    if ((slot % 2) == 0 && len > 0)
+    {
+        unsigned m = len > PICSTYLE_BLOB_SIZE ? PICSTYLE_BLOB_SIZE : len;
+        int idx = slot / 2;                         /* 0, 1, 2 = User 1, 2, 3 */
+
+        picstyle_blob_len = m;
+        picstyle_blob_slot = idx + 1;
+        picstyle_blob_seq++;
+
+        if (idx < 2)                                /* User 1 and User 2 only */
+        {
+            memcpy(picstyle_slot_blob[idx], buf, m);
+            picstyle_slot_len[idx] = m;
+            picstyle_slot_seq[idx]++;
+        }
+    }
+}
+
 PROP_HANDLER(PROP_PC_FLAVOR1_PARAM)
 {
+    picstyle_flavor_capture(0, len, buf);
     if(len < 54) return; // 50 chars at buf + 4
     snprintf(user_picstyle_name_1, 50, "%s", (char*) buf + 4);
 }
 
+PROP_HANDLER(0x04010002) { picstyle_flavor_capture(1, len, buf); }
+
 PROP_HANDLER(PROP_PC_FLAVOR2_PARAM)
 {
+    picstyle_flavor_capture(2, len, buf);
     if(len < 54) return; // 50 chars at buf + 4
     snprintf(user_picstyle_name_2, 50, "%s", (char*) buf + 4);
 }
 
+PROP_HANDLER(0x04010004) { picstyle_flavor_capture(3, len, buf); }
+
 PROP_HANDLER(PROP_PC_FLAVOR3_PARAM)
 {
+    picstyle_flavor_capture(4, len, buf);
     if(len < 54) return; // 50 chars at buf + 4
     snprintf(user_picstyle_name_3, 50, "%s", (char*) buf + 4);
 }
+
+PROP_HANDLER(0x04010006) { picstyle_flavor_capture(5, len, buf); }
 
 // PROP_PICSTYLE_OF_USERDEFx keep a base picstyle ID assigned to user defined
 // picture styles.

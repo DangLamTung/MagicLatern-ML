@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<film>
+    <name>Portra 160</name>
+    <code>P160</code>
+    <brand>Kodak</brand>
+    <type>Color Negative</type>
+    <base>0x84</base>
+    <iso>160</iso>
+    <raw_iso>0x4d</raw_iso>
+    <contrast>0</contrast>
+    <sharpness>1</sharpness>
+    <saturation>0</saturation>
+    <tone>0</tone>
+    <kelvin>4900</kelvin>
+    <wbs_ba>3</wbs_ba>
+    <wbs_gm>1</wbs_gm>
+    <mono>0</mono>
+    <lut>ML/DATA/PORTRA160.CUB</lut>
+    <description>Natural skin, gentle contrast, very fine grain.</description>
+</film>

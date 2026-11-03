@@ -3617,10 +3617,23 @@ int liveview_display_idle()
 // when it's safe to draw zebras and other on-screen stuff
 int zebra_should_run()
 {
+#ifdef CONFIG_QEMU
+    int filter_active = 0;
+#ifdef CONFIG_DISPLAY_FILTERS
+    extern int display_filter_enabled();
+    filter_active = display_filter_enabled();
+#endif
+    return (liveview_display_idle() || (lv && filter_active)) &&
+        (get_global_draw() || filter_active) &&
+        !is_zoom_mode_so_no_zebras() &&
+        !(clearscreen == 1 && (get_halfshutter_pressed() || dofpreview)) &&
+        !WAVEFORM_FULLSCREEN;
+#else
     return liveview_display_idle() && get_global_draw() &&
         !is_zoom_mode_so_no_zebras() &&
         !(clearscreen == 1 && (get_halfshutter_pressed() || dofpreview)) &&
         !WAVEFORM_FULLSCREEN;
+#endif
 }
 
 #ifdef FEATURE_OVERLAYS_IN_PLAYBACK_MODE

@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<film>
+    <name>CineStill 50D</name>
+    <code>50D</code>
+    <brand>CineStill</brand>
+    <type>Color Negative</type>
+    <base>0x82</base>
+    <iso>50</iso>
+    <raw_iso>0x48</raw_iso>
+    <contrast>0</contrast>
+    <sharpness>3</sharpness>
+    <saturation>-2</saturation>
+    <tone>0</tone>
+    <kelvin>6800</kelvin>
+    <wbs_ba>-1</wbs_ba>
+    <wbs_gm>2</wbs_gm>
+    <mono>0</mono>
+    <lut>ML/DATA/CS50D.CUB</lut>
+    <description>Cinema daylight: clean, restrained colours, very fine.</description>
+</film>

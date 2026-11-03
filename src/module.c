@@ -37,7 +37,11 @@ static struct menu_entry module_menu[];
 
 CONFIG_INT("module.autoload", module_autoload_disabled, 0);
 CONFIG_INT("module.console", module_console_enabled, 0);
+#ifdef CONFIG_QEMU
+CONFIG_INT("module.ignore_crashes", module_ignore_crashes, 1);   /* headless bench */
+#else
 CONFIG_INT("module.ignore_crashes", module_ignore_crashes, 0);
+#endif
 CONFIG_INT("module.show_hidden", module_show_hidden, 0);
 char *module_lockfile = MODULE_PATH"LOADING.LCK";
 

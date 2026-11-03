@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<film>
+    <name>Kodachrome 64</name>
+    <code>KCHR64</code>
+    <brand>Kodak</brand>
+    <type>Reversal / Slide</type>
+    <base>0x84</base>
+    <iso>64</iso>
+    <raw_iso>0x48</raw_iso>
+    <contrast>1</contrast>
+    <sharpness>4</sharpness>
+    <saturation>1</saturation>
+    <tone>0</tone>
+    <kelvin>5200</kelvin>
+    <wbs_ba>2</wbs_ba>
+    <wbs_gm>1</wbs_gm>
+    <mono>0</mono>
+    <lut>ML/DATA/KCHR64.CUB</lut>
+    <description>Deep reds, golden yellows, dark blues.</description>
+</film>

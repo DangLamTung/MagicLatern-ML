@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<film>
+    <name>Velvia 50</name>
+    <code>VEL50</code>
+    <brand>Fujifilm</brand>
+    <type>Reversal / Slide</type>
+    <base>0x83</base>
+    <iso>50</iso>
+    <raw_iso>0x48</raw_iso>
+    <contrast>0</contrast>
+    <sharpness>4</sharpness>
+    <saturation>2</saturation>
+    <tone>0</tone>
+    <kelvin>5200</kelvin>
+    <wbs_ba>0</wbs_ba>
+    <wbs_gm>0</wbs_gm>
+    <mono>0</mono>
+    <lut>ML/DATA/VELVIA50.CUB</lut>
+    <description>The landscape legend: extreme saturation.</description>
+</film>

@@ -796,6 +796,7 @@ static MENU_UPDATE_FUNC (prop_display)
     int* data = 0;
     size_t len = 0;
     int err = prop_get_value(prop, (void **) &data, &len);
+    (void) err;
     MENU_SET_VALUE(
     "%8x: %d: %x %x %x %x\n"
         "'%s' ",

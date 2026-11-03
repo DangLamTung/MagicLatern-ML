@@ -94,12 +94,32 @@ int ResumeLiveView()
 /* handled in debug.c, handle_tricky_canon_calls */
 /* todo: move them here */
 
+#if defined(CONFIG_6D) && defined(CONFIG_QEMU)
+int display_is_off_requested = 0;
+int get_display_is_on_6D(void)
+{
+    if (DISPLAY_STATEOBJ && DISPLAY_STATEOBJ->current_state != 0)
+        return 1;
+    extern int lv;
+    extern int lv_paused;
+    if (lv && !lv_paused && !display_is_off_requested)
+        return 1;
+    return 0;
+}
+#endif
+
 void display_on()
 {
+#if defined(CONFIG_6D) && defined(CONFIG_QEMU)
+    display_is_off_requested = 0;
+#endif
     fake_simple_button(MLEV_TURN_ON_DISPLAY);
 }
 void display_off()
 {
+#if defined(CONFIG_6D) && defined(CONFIG_QEMU)
+    display_is_off_requested = 1;
+#endif
     fake_simple_button(MLEV_TURN_OFF_DISPLAY);
 }
 

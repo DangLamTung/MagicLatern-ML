@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<film>
+    <name>Provia 100F</name>
+    <code>PRO100</code>
+    <brand>Fujifilm</brand>
+    <type>Reversal / Slide</type>
+    <base>0x84</base>
+    <iso>100</iso>
+    <raw_iso>0x48</raw_iso>
+    <contrast>2</contrast>
+    <sharpness>2</sharpness>
+    <saturation>2</saturation>
+    <tone>0</tone>
+    <kelvin>5200</kelvin>
+    <wbs_ba>-2</wbs_ba>
+    <wbs_gm>-1</wbs_gm>
+    <mono>0</mono>
+    <lut>ML/DATA/PROVIA100.CUB</lut>
+    <description>The balanced slide film: clean colours, slightly cool.</description>
+</film>

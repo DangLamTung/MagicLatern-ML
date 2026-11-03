@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<film>
+    <name>UltraMax 400</name>
+    <code>UMAX</code>
+    <brand>Kodak</brand>
+    <type>Color Negative</type>
+    <base>0x84</base>
+    <iso>400</iso>
+    <raw_iso>0x58</raw_iso>
+    <contrast>2</contrast>
+    <sharpness>3</sharpness>
+    <saturation>2</saturation>
+    <tone>0</tone>
+    <kelvin>5200</kelvin>
+    <wbs_ba>2</wbs_ba>
+    <wbs_gm>1</wbs_gm>
+    <mono>0</mono>
+    <lut>ML/DATA/UMAX400.CUB</lut>
+    <description>Natural colours, a hint of warmth, generous contrast.</description>
+</film>

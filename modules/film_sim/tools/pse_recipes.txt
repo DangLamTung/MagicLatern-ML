@@ -1,0 +1,131 @@
+Picture Style Editor recipes (generated from the film_sim filter core)
+======================================================================
+
+Each block is what Picture Style Editor needs for one stock: a tone curve
+and, for the six colour axes, the hue / saturation / brightness change that
+the filter applies.  Enter them, save the .pf3, register it with EOS
+Utility into User 2, boot with the module, then clone User 2 -> User 1.
+
+tone curve inputs (grey ramp): [0, 32, 64, 96, 128, 159, 191, 223, 255]
+
+LIMITS: PSE has a tone curve plus six hue axes.  The filter also does
+shadow/highlight split toning and highlight desaturation, which PSE
+cannot express, so a .pf3 built from these numbers is a close
+approximation, not a bit-exact copy.  Leave the PSE base style and its
+sliders at default - the curve below already contains contrast, black
+point and shoulder.  Once the style is in a user slot, cloning it to
+User 1 copies it byte for byte, so the camera is then exact.
+
+--- Neutral -------------------------------------------
+  preset params: contrast 0  black 0  shoulder 0  saturation 100  hue 0
+
+  tone curve (input -> output, 8-bit):
+      0->  0   32-> 32   64-> 64   96-> 96  128->128  159->159  191->191  223->223  255->255
+
+  colour axes (hue deg / sat % / brightness %):
+    R:  hue   +0.0   sat   +0.0   bright   -0.4
+    Y:  hue   +0.2   sat   +0.0   bright   -0.4
+    G:  hue   +0.0   sat   -0.4   bright   -1.2
+    C:  hue   +0.0   sat   +0.0   bright   -0.4
+    B:  hue   +0.2   sat   +0.0   bright   -0.4
+    M:  hue   +0.0   sat   -0.8   bright   -0.8
+
+--- Fuji Classic Neg ----------------------------------
+  preset params: contrast 32  black 10  shoulder 30  saturation 92  hue 5
+
+  tone curve (input -> output, 8-bit):
+      0-> 10   32-> 32   64-> 62   96-> 99  128->138  159->176  191->209  223->234  255->252
+
+  colour axes (hue deg / sat % / brightness %):
+    R:  hue   +3.5   sat   +0.0   bright  -12.2
+    Y:  hue   +1.8   sat  -34.9   bright   +0.0
+    G:  hue   +5.6   sat  -11.0   bright   +0.0
+    C:  hue   +1.9   sat  -27.1   bright   +0.0
+    B:  hue   +0.7   sat   +0.0   bright   -2.0
+    M:  hue   +4.3   sat   -5.2   bright   -2.0
+
+--- Fuji Pro 400H -------------------------------------
+  preset params: contrast 18  black 8  shoulder 25  saturation 96  hue 3
+
+  tone curve (input -> output, 8-bit):
+      0->  7   32-> 35   64-> 66   96->101  128->137  159->171  191->203  223->231  255->254
+
+  colour axes (hue deg / sat % / brightness %):
+    R:  hue   +2.8   sat   +0.0   bright   -5.9
+    Y:  hue   +4.5   sat  -26.7   bright   +0.0
+    G:  hue   +4.2   sat   -4.7   bright   +0.0
+    C:  hue   +0.3   sat  -15.3   bright   +0.0
+    B:  hue   +1.4   sat   +0.0   bright   -0.4
+    M:  hue   +2.2   sat   -4.7   bright   -0.8
+
+--- Kodak Portra 400 ----------------------------------
+  preset params: contrast 15  black 10  shoulder 25  saturation 90  hue -3
+
+  tone curve (input -> output, 8-bit):
+      0->  6   32-> 35   64-> 67   96->101  128->137  159->171  191->202  223->230  255->251
+
+  colour axes (hue deg / sat % / brightness %):
+    R:  hue   -2.3   sat   -3.3   bright   -4.7
+    Y:  hue   -3.4   sat  -31.4   bright   +0.0
+    G:  hue   -5.2   sat   -7.6   bright   -2.4
+    C:  hue   -4.5   sat  -21.1   bright   -1.6
+    B:  hue   -2.6   sat   -0.4   bright  -10.2
+    M:  hue   -2.6   sat   -8.0   bright   -2.4
+
+--- Fuji Velvia 50 ------------------------------------
+  preset params: contrast 45  black 0  shoulder 10  saturation 140  hue 0
+
+  tone curve (input -> output, 8-bit):
+      0->  1   32-> 19   64-> 47   96-> 85  128->131  159->175  191->212  223->238  255->254
+
+  colour axes (hue deg / sat % / brightness %):
+    R:  hue   +0.0   sat   +0.0   bright   -5.9
+    Y:  hue   +0.0   sat   -4.3   bright   +0.0
+    G:  hue   +0.0   sat   +0.0   bright   +0.0
+    C:  hue   +0.0   sat   -7.1   bright   +0.0
+    B:  hue   +0.0   sat   +0.0   bright   -4.3
+    M:  hue   +0.0   sat   +0.0   bright   +0.0
+
+--- Cinema 800T ---------------------------------------
+  preset params: contrast 25  black 12  shoulder 35  saturation 85  hue -6
+
+  tone curve (input -> output, 8-bit):
+      0-> 15   32-> 37   64-> 67   96->101  128->140  159->176  191->206  223->232  255->247
+
+  colour axes (hue deg / sat % / brightness %):
+    R:  hue   -8.3   sat   -5.8   bright  -12.5
+    Y:  hue   -5.5   sat  -40.4   bright   +0.0
+    G:  hue   -9.0   sat  -10.6   bright   -3.5
+    C:  hue  -10.0   sat  -30.4   bright   -2.0
+    B:  hue   -5.6   sat   +0.0   bright   -8.2
+    M:  hue   -8.7   sat  -11.0   bright   +0.0
+
+--- B&W Tri-X 400 -------------------------------------
+  preset params: contrast 50  black 10  shoulder 30  saturation 0  hue 0
+
+  tone curve (input -> output, 8-bit):
+      0->  6   32-> 26   64-> 54   96-> 92  128->138  159->181  191->215  223->239  255->255
+
+  colour axes (hue deg / sat % / brightness %):
+    R:  sat -100.0 (fully desaturated)
+    Y:  sat -100.0 (fully desaturated)
+    G:  sat -100.0 (fully desaturated)
+    C:  sat -100.0 (fully desaturated)
+    B:  sat -100.0 (fully desaturated)
+    M:  sat -100.0 (fully desaturated)
+    -> a monochrome style: set saturation -100 on all six axes
+
+--- Tungsten 64T --------------------------------------
+  preset params: contrast 18  black 14  shoulder 30  saturation 80  hue 8
+
+  tone curve (input -> output, 8-bit):
+      0-> 14   32-> 39   64-> 69   96->103  128->139  159->173  191->204  223->231  255->247
+
+  colour axes (hue deg / sat % / brightness %):
+    R:  hue   +8.3   sat   -1.9   bright  -18.8
+    Y:  hue   -1.7   sat  -44.2   bright   -1.6
+    G:  hue   +7.5   sat  -17.4   bright   -5.5
+    C:  hue   +9.4   sat  -37.0   bright   -0.4
+    B:  hue   +2.7   sat   -2.6   bright  -10.6
+    M:  hue   +8.0   sat  -12.1   bright   -6.3
+

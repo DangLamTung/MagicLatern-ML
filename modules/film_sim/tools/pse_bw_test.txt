@@ -1,0 +1,48 @@
+Picture Style Editor recipes (generated from the film_sim filter core)
+======================================================================
+
+Each block is what Picture Style Editor needs for one stock: a tone curve
+and, for the six colour axes, the hue / saturation / brightness change that
+the filter applies.
+
+Route: enter the numbers in PSE, save a .pf3 (NOT .pf2 - see below), then
+register it with EOS Utility into User Def 1.  The camera's JPEGs use it
+from then on, with no module involved.  To keep it in the card library, use
+Film -> Save User 1 in the module afterwards.
+
+tone curve inputs (grey ramp): [0, 32, 64, 96, 128, 159, 191, 223, 255]
+
+SAVE AS PF3, NEVER PF2.  PSE warns when saving PF2 that these are lost:
+  - tone curve (RGB)
+  - six colour-axis adjustment
+  - sharpness fineness and threshold
+Both of the first two are the whole point of the numbers below, so a PF2
+file would silently discard this recipe.  PF3 keeps them; the 6D reads it.
+
+LIMITS: PSE has a tone curve plus six hue axes.  The filter also does
+shadow/highlight split toning and highlight desaturation, which PSE
+cannot express, so a .pf3 built from these numbers is a close
+approximation, not a bit-exact copy.  Leave the PSE base style and its
+sliders at default - the curve below already contains contrast, black
+point and shoulder.
+
+EASIEST FIRST TEST: the monochrome stock.  Start PSE from its built-in
+Monochrome style, apply the curve below, leave every hue axis at -100
+saturation, save, register.  A black-and-white JPEG is impossible to
+misread, so one shot proves the whole path end to end.
+
+--- B&W Tri-X 400 -------------------------------------
+  preset params: contrast 50  black 10  shoulder 30  saturation 0  hue 0
+
+  tone curve (input -> output, 8-bit):
+      0->  6   32-> 26   64-> 54   96-> 92  128->138  159->181  191->215  223->239  255->255
+
+  colour axes (hue deg / sat % / brightness %):
+    R:  sat -100.0 (fully desaturated)
+    Y:  sat -100.0 (fully desaturated)
+    G:  sat -100.0 (fully desaturated)
+    C:  sat -100.0 (fully desaturated)
+    B:  sat -100.0 (fully desaturated)
+    M:  sat -100.0 (fully desaturated)
+    -> a monochrome style: set saturation -100 on all six axes
+

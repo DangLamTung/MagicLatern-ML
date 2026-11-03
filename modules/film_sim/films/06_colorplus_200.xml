@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<film>
+    <name>ColorPlus 200</name>
+    <code>CP200</code>
+    <brand>Kodak</brand>
+    <type>Color Negative</type>
+    <base>0x84</base>
+    <iso>200</iso>
+    <raw_iso>0x50</raw_iso>
+    <contrast>0</contrast>
+    <sharpness>2</sharpness>
+    <saturation>0</saturation>
+    <tone>0</tone>
+    <kelvin>6000</kelvin>
+    <wbs_ba>2</wbs_ba>
+    <wbs_gm>-1</wbs_gm>
+    <mono>0</mono>
+    <lut>ML/DATA/CP200.CUB</lut>
+    <description>A 90s family album: warm and gentle.</description>
+</film>

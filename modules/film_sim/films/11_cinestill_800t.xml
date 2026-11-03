@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<film>
+    <name>CineStill 800T</name>
+    <code>800T</code>
+    <brand>CineStill</brand>
+    <type>Color Negative</type>
+    <base>0x84</base>
+    <iso>800</iso>
+    <raw_iso>0x60</raw_iso>
+    <contrast>-1</contrast>
+    <sharpness>0</sharpness>
+    <saturation>2</saturation>
+    <tone>0</tone>
+    <kelvin>4000</kelvin>
+    <wbs_ba>-1</wbs_ba>
+    <wbs_gm>3</wbs_gm>
+    <mono>0</mono>
+    <lut>ML/DATA/CS800T.CUB</lut>
+    <description>Cinema film for tungsten: cyan-green night lights.</description>
+</film>

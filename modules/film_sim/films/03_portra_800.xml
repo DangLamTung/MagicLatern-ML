@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<film>
+    <name>Portra 800</name>
+    <code>P800</code>
+    <brand>Kodak</brand>
+    <type>Color Negative</type>
+    <base>0x84</base>
+    <iso>800</iso>
+    <raw_iso>0x60</raw_iso>
+    <contrast>1</contrast>
+    <sharpness>1</sharpness>
+    <saturation>2</saturation>
+    <tone>0</tone>
+    <kelvin>5200</kelvin>
+    <wbs_ba>2</wbs_ba>
+    <wbs_gm>1</wbs_gm>
+    <mono>0</mono>
+    <lut>ML/DATA/PORTRA800.CUB</lut>
+    <description>Portra for low light: warmer, more saturated.</description>
+</film>

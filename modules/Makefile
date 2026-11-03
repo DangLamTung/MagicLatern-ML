@@ -38,6 +38,8 @@ ML_MODULES = \
     raw_video/mlv_snd \
     file_man \
     pic_view \
+    film_lv \
+    film_sim \
     ettr \
     dual_iso \
     silent \

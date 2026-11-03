@@ -1,0 +1,246 @@
+film_sim colour calibration
+===========================
+
+Input: X-Rite ColorChecker Classic (sRGB approximations), 24 patches,
+720x480, converted to UYVY with ML's rgb2yuv422_rec601 coefficients.
+Error metric: CIEDE2000 between reference sRGB and the measured patch.
+(dE00 ~1 is just visible, ~2-3 is a clear shift, >5 is wrong.)
+
+1. Chroma convention of the 6D LiveView buffers
+------------------------------------------------
+  signed  U/V (int8, neutral 0x00)  mean dE00  0.86  max  2.11
+  offset  U/V (neutral 0x80)        mean dE00 51.05  max 86.83
+  => signed wins, matching imgconv.c (COERCE(...,-128,127) + UYVY_PACK).
+     The module uses signed chroma.
+
+2. Round-trip through the UYVY path (no film applied)
+----------------------------------------------------
+  RGB -> UYVY -> RGB               mean dE00  0.53  max  1.38
+  (4:2:2 subsampling and 8-bit rounding set this floor)
+
+2b. Is the filter itself colour-neutral?
+----------------------------------------
+  Neutral, strength 100, grain 0    mean dE00  0.00  max  0.00
+  (measured against the pipeline input, so the 8-bit UYVY round-trip
+   above cancels out and only the filter's own error remains)
+  => bit-exact identity: the filter introduces no colour error; every
+     other number below is the film look doing what it was written to do.
+
+3. Film stocks, per-patch mean dE00 vs the reference
+----------------------------------------------------
+  stock                    mean    max  clip  max dh   worst patch
+  Neutral                  0.66   1.50     0     2.5   foliage (1.5)
+  Fuji Classic Neg         4.49   8.03     0    21.1   dark skin (8.0)
+  Fuji Pro 400H            3.26   7.19     0    13.9   orange yellow (7.2)
+  Kodak Portra 400         3.37   5.73     0     8.7   cyan (5.7)
+  Fuji Velvia 50           5.16   7.58     1     6.6   black (7.6)
+  Cinema 800T              5.88   8.78     1    14.2   black (8.8)
+  B&W Tri-X 400           17.86  28.41     0   138.7   yellow (28.4)
+  Tungsten 64T             5.97   9.24     1    23.4   dark skin (9.2)
+
+  clip = patches with a channel pinned at 0 or 255 (colour thrown away)
+  max dh = largest hue rotation in degrees on memory colours
+           (skin, foliage, sky, flower), where a shift is most visible
+
+Per-patch detail
+  Neutral:
+    dark skin       0.82
+    light skin      0.67
+    blue sky        1.27
+    foliage         1.50
+    blue flower     0.72
+    bluish green    0.44
+    orange          0.60
+    purplish blue   0.67
+    moderate red    0.63
+    purple          0.67
+    yellow green    0.78
+    orange yellow   0.82
+    blue            0.62
+    green           1.04
+    red             0.46
+    yellow          0.58
+    magenta         0.63
+    cyan            0.97
+    white           0.61
+    neutral 8       0.15
+    neutral 6.5     0.35
+    neutral 5       0.30
+    neutral 3.5     0.31
+    black           0.20
+  Fuji Classic Neg:
+    dark skin       8.03
+    light skin      6.43
+    blue sky        2.41
+    foliage         3.45
+    blue flower     4.74
+    bluish green    4.75
+    orange          7.34
+    purplish blue   0.60
+    moderate red    4.29
+    purple          3.95
+    yellow green    4.67
+    orange yellow   7.87
+    blue            0.94
+    green           2.61
+    red             3.95
+    yellow          6.47
+    magenta         3.83
+    cyan            4.71
+    white           3.05
+    neutral 8       5.04
+    neutral 6.5     4.73
+    neutral 5       3.19
+    neutral 3.5     4.17
+    black           6.46
+  Fuji Pro 400H:
+    dark skin       3.58
+    light skin      6.34
+    blue sky        2.16
+    foliage         2.55
+    blue flower     3.65
+    bluish green    3.32
+    orange          5.28
+    purplish blue   1.03
+    moderate red    2.68
+    purple          2.52
+    yellow green    3.92
+    orange yellow   7.19
+    blue            0.19
+    green           2.42
+    red             2.02
+    yellow          6.38
+    magenta         3.34
+    cyan            2.97
+    white           1.37
+    neutral 8       3.02
+    neutral 6.5     3.68
+    neutral 5       3.36
+    neutral 3.5     1.94
+    black           3.38
+  Kodak Portra 400:
+    dark skin       1.30
+    light skin      3.38
+    blue sky        4.59
+    foliage         2.11
+    blue flower     4.84
+    bluish green    3.75
+    orange          3.24
+    purplish blue   2.66
+    moderate red    3.41
+    purple          2.57
+    yellow green    3.94
+    orange yellow   3.71
+    blue            2.52
+    green           2.19
+    red             2.92
+    yellow          4.31
+    magenta         2.84
+    cyan            5.73
+    white           4.17
+    neutral 8       5.19
+    neutral 6.5     4.24
+    neutral 5       3.14
+    neutral 3.5     2.04
+    black           2.04
+  Fuji Velvia 50:
+    dark skin       6.58
+    light skin      5.47
+    blue sky        2.86
+    foliage         5.36
+    blue flower     4.03
+    bluish green    6.54
+    orange          6.03
+    purplish blue   4.74
+    moderate red    4.91
+    purple          5.83
+    yellow green    6.31
+    orange yellow   5.71
+    blue            5.56
+    green           4.65
+    red             7.34
+    yellow          5.56
+    magenta         4.14
+    cyan            2.08
+    white           4.93
+    neutral 8       6.10
+    neutral 6.5     5.46
+    neutral 5       0.10
+    neutral 3.5     6.07
+    black           7.58
+  Cinema 800T:
+    dark skin       6.30
+    light skin      4.97
+    blue sky        6.04
+    foliage         3.52
+    blue flower     6.07
+    bluish green    5.92
+    orange          5.74
+    purplish blue   4.30
+    moderate red    5.98
+    purple          6.53
+    yellow green    6.78
+    orange yellow   6.36
+    blue            4.96
+    green           2.68
+    red             8.60
+    yellow          6.68
+    magenta         4.49
+    cyan            6.84
+    white           6.62
+    neutral 8       7.77
+    neutral 6.5     6.31
+    neutral 5       3.91
+    neutral 3.5     4.98
+    black           8.78
+  B&W Tri-X 400:
+    dark skin      14.93
+    light skin     17.69
+    blue sky       14.59
+    foliage        18.45
+    blue flower    19.01
+    bluish green   22.05
+    orange         26.32
+    purplish blue  22.91
+    moderate red   24.38
+    purple         21.32
+    yellow green   26.38
+    orange yellow  26.97
+    blue           25.40
+    green          25.11
+    red            25.81
+    yellow         28.41
+    magenta        25.18
+    cyan           22.59
+    white           1.00
+    neutral 8       5.28
+    neutral 6.5     6.02
+    neutral 5       2.79
+    neutral 3.5     2.73
+    black           3.39
+  Tungsten 64T:
+    dark skin       9.24
+    light skin      4.48
+    blue sky        4.72
+    foliage         4.93
+    blue flower     5.89
+    bluish green    7.66
+    orange          9.13
+    purplish blue   3.06
+    moderate red    7.11
+    purple          5.07
+    yellow green    5.32
+    orange yellow   8.11
+    blue            1.97
+    green           5.36
+    red             6.03
+    yellow          6.13
+    magenta         6.64
+    cyan            5.47
+    white           7.03
+    neutral 8       8.83
+    neutral 6.5     6.83
+    neutral 5       3.66
+    neutral 3.5     4.18
+    black           6.44
+

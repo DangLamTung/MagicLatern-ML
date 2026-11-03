@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<film>
+    <name>Superia 400</name>
+    <code>SUP400</code>
+    <brand>Fujifilm</brand>
+    <type>Color Negative</type>
+    <base>0x84</base>
+    <iso>400</iso>
+    <raw_iso>0x58</raw_iso>
+    <contrast>0</contrast>
+    <sharpness>2</sharpness>
+    <saturation>1</saturation>
+    <tone>0</tone>
+    <kelvin>5200</kelvin>
+    <wbs_ba>2</wbs_ba>
+    <wbs_gm>2</wbs_gm>
+    <mono>0</mono>
+    <lut>ML/DATA/SUPERIA400.CUB</lut>
+    <description>Greens up front, muted reds, soft contrast.</description>
+</film>

@@ -60,7 +60,14 @@ def rbf_init_font(file):
     font = rbf_load(open(file, "rb"))
 
 def extent_func(string):
+    # Characters outside the font's table have no glyph metrics; they must
+    # measure as zero rather than raise. argnor23.rbf only covers 32..159, and
+    # html2text passes whole paragraphs -- including their newlines -- to the
+    # wrapper, so a README with any wrapped line used to abort the module
+    # build with "IndexError: list index out of range" from here.
     w = 0
     for c in string:
-        w += font.wTable[ord(c) - font.charFirst]
+        idx = ord(c) - font.charFirst
+        if 0 <= idx < len(font.wTable):
+            w += font.wTable[idx]
     return (w, 0)

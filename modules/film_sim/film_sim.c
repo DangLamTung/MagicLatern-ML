@@ -2266,9 +2266,11 @@ static int fs_apply_film_now(void) {
     st.sharpness = fs_clamp_i(film_sim_sharp, 0, 7);
     st.saturation = 0;
     st.tone = 0;
-    st.kelvin = 0; /* leave the camera's WB alone */
-    st.wbs_ba = 0;
-    st.wbs_gm = 0;
+    /* Kelvin and WB shift are NOT neutralised: every stock in film_table.h
+     * carries its own balance (4900-6000 K plus a blue/amber and green/magenta
+     * shift) and that is a property of the emulsion, not of the look. Zeroing
+     * them here left every stock shooting at whatever WB the camera was on. */
+
   }
 
   int base = st.base;

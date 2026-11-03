@@ -695,7 +695,6 @@ static void fs_yuv_hook_body(uint32_t *regs, uint32_t *stack, uint32_t pc)
                                                        (int)st);
                     if (gp != (unsigned char *)buf)
                         fs_dcache_clean(gp, (uint32_t)r * st);
-                    buf = (void *)ba;   /* everything else keeps the original */
                 }
                 fs_yuv_graded++;
                 if (pc == FS_YUV_ADDR_STILL) fs_yuv_g_still++;

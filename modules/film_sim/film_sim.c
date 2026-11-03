@@ -877,6 +877,26 @@ static void fs_sync() {
  * bar is a word fill -- no per-pixel maths, no cost next to the grade.
  * 16:9 keeps the full width and takes 9/16 of it in height; XPan is 65:24.
  */
+/*
+ * Fill a run of UYVY with black.
+ *
+ * memset(0) looks like black and is not: UYVY packs U,Y0,V,Y1, so zeroing the
+ * bytes means U=0 and V=0, i.e. chroma -128, which resolves to a saturated
+ * green. Neutral is U=V=128 with Y=0.
+ */
+static void fs_fill_black_yuv(void *dst, size_t bytes) {
+  unsigned char *d = (unsigned char *)dst;
+  size_t i;
+  for (i = 0; i + 3 < bytes; i += 4) {
+    d[i + 0] = 128;
+    d[i + 1] = 0;
+    d[i + 2] = 128;
+    d[i + 3] = 0;
+  }
+  for (; i < bytes; i++)
+    d[i] = (i % 2) ? 0 : 128;
+}
+
 static void fs_aspect_bars(void *dst, int pitch, int row0, int row1) {
   int mode = film_sim_aspect;
   if (mode <= 0 || !dst || pitch <= 0)
@@ -920,9 +940,9 @@ static void fs_aspect_bars(void *dst, int pitch, int row0, int row1) {
     int top = row0 + (active - box_h) / 2;
     int bot = top + box_h;
     for (int y = row0; y < top; y++)
-      memset((char *)dst + (size_t)y * pitch, 0, (size_t)pitch);
+      fs_fill_black_yuv((char *)dst + (size_t)y * pitch, (size_t)pitch);
     for (int y = bot; y < row1; y++)
-      memset((char *)dst + (size_t)y * pitch, 0, (size_t)pitch);
+      fs_fill_black_yuv((char *)dst + (size_t)y * pitch, (size_t)pitch);
     return;
   }
 
@@ -935,9 +955,9 @@ static void fs_aspect_bars(void *dst, int pitch, int row0, int row1) {
   for (int y = row0; y < row1; y++) {
     unsigned char *r = (unsigned char *)dst + (size_t)y * pitch;
     if (left > 0)
-      memset(r, 0, (size_t)left * 2);
+      fs_fill_black_yuv(r, (size_t)left * 2);
     if (right < width_px)
-      memset(r + right * 2, 0, (size_t)(width_px - right) * 2);
+      fs_fill_black_yuv(r + right * 2, (size_t)(width_px - right) * 2);
   }
 }
 
@@ -1323,41 +1343,20 @@ static unsigned int fs_display_filter(unsigned int ctx) {
            (unsigned)buffers->src_buf, (unsigned)buffers->dst_buf);
   fs_process_frame(buffers->src_buf, buffers->dst_buf);
 
-  /*
-   * Framing on the panel.
-   *
-   * film.sim.aspect could not show anything on LiveView -- it only reached the
-   * develop -- so choosing 65:24 changed a menu value and nothing else. Canon's own JPEG is always the full 3:2 frame and nothing a
-   * module writes can change its dimensions, so the honest thing to do with a
-   * framing setting is show where the crop is while shooting and leave the crop
-   * itself to afterwards. Bars, not a scaled crop: the frame stays 1:1 with the
-   * sensor, so nothing gets composed off-frame.
-   */
-  if (film_sim_aspect > 0 && buffers->dst_buf) {
-    struct vram_info *vr = get_yuv422_vram();
-    int pw = (vr && vr->pitch > 0) ? vr->pitch / 2 : 720;
-    int ph = (vr && vr->height > 0) ? vr->height : 480;
-    int x0 = 0, x1 = pw, y0 = 0, y1 = ph;
-    unsigned char *d = (unsigned char *)buffers->dst_buf;
-    se_cam_aspect_window(pw, ph, &x0, &x1, &y0, &y1);
-    if (y0 > 0)
-      memset(d, 0, (size_t)y0 * (size_t)(pw * 2));
-    if (y1 < ph)
-      memset(d + (size_t)y1 * (size_t)(pw * 2), 0,
-             (size_t)(ph - y1) * (size_t)(pw * 2));
-    for (int yy = (y0 > 0 ? y0 : 0); yy < (y1 < ph ? y1 : ph); yy++) {
-      unsigned char *r2 = d + (size_t)yy * (size_t)(pw * 2);
-      if (x0 > 0) memset(r2, 0, (size_t)x0 * 2);
-      if (x1 < pw) memset(r2 + (size_t)x1 * 2, 0, (size_t)(pw - x1) * 2);
-    }
-  }
   fs_valid_frame = 1;
   /* Tell the core the frame is complete, so it only moves the display onto a
    * buffer that holds a finished picture. A skipped frame stays silent and the
    * panel is left where it is. */
   display_filter_mark_written();
-  /* heartbeat: turns "frames=0 at boot" into a rate you can check */
-  if ((fs_stat_frames % 300) == 0) {
+  /*
+   * Heartbeat: turns "frames=0 at boot" into a rate you can check.
+   *
+   * Behind film.sim.dbglog like every other periodic line, because each one is
+   * a card write: at 30 fps this fired every 10 s of LiveView and the body's
+   * access lamp blinked with it, which reads exactly like the camera still
+   * being busy long after the shot.
+   */
+  if (film_sim_dbglog && (fs_stat_frames % 300) == 0) {
     fs_log("lv: %d frames, %dms last, %dms max, %d skipped",
            (int)fs_stat_frames, fs_stat_last_ms, fs_stat_max_ms,
            (int)fs_stat_skipped);

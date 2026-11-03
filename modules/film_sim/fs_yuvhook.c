@@ -81,6 +81,36 @@ static void fs_dcache_clean(void *p, uint32_t len)
 }
 
 int fs_yuvhook_dcache_used(void) { return fs_dcache_used; }
+
+/*
+ * Grade a frame through the cached alias, and hand it back to Canon.
+ *
+ * Both branches of the hook must come through here. Only the bare-pointer
+ * branch used to, so a site that hands a memSuite instead would have graded
+ * 40 MB through the uncached view: ~9.5 MB/s, i.e. ~8 s inside the shot. It
+ * never ran on this body (every log so far shows a bare r0), which is exactly
+ * why the difference went unnoticed.
+ */
+static uint32_t fs_yuv_grade_cached(void *buf, int width, int rows, int stride)
+{
+    uint32_t ba = (uint32_t)buf;
+    unsigned char *gp = (unsigned char *)buf;
+    uint32_t ms;
+
+    /* 0x40000000-0x7FFFFFFF is the DRAM window; inside it CACHEABLE() is the
+     * same RAM with bit 30 cleared. Outside it (ROM, low RAM) the pointer is
+     * left alone -- clearing bit 30 there would point at something else. */
+    if (ba >= 0x40000000u && ba < 0x80000000u) {
+        gp = (unsigned char *)CACHEABLE(buf);
+        if (gp != (unsigned char *)buf)
+            fs_dcache_used = 1;
+    }
+    ms = fs_yuvlook_apply(gp, width, rows, stride);
+    if (gp != (unsigned char *)buf)
+        fs_dcache_clean(gp, (uint32_t)rows * stride);
+    return ms;
+}
+
 static int fs_hook_shots = 0;
 
 /* Still YUV capture path entry points for Canon 6D 1.1.6 */
@@ -685,16 +715,8 @@ static void fs_yuv_hook_body(uint32_t *regs, uint32_t *stack, uint32_t pc)
                 fs_yuv_last_stride = (int)st;
                 fs_yuv_last_rows   = r;
                 {
-                    uint32_t ba = (uint32_t)buf;
-                    unsigned char *gp = (unsigned char *)buf;
-                    if (ba >= 0x40000000u) {
-                        gp = (unsigned char *)(ba & ~0x40000000u);
-                        fs_dcache_used = 1;
-                    }
-                    fs_yuv_grade_ms = fs_yuvlook_apply(gp, (int)(st / 2), r,
-                                                       (int)st);
-                    if (gp != (unsigned char *)buf)
-                        fs_dcache_clean(gp, (uint32_t)r * st);
+                    fs_yuv_grade_ms = fs_yuv_grade_cached(buf, (int)(st / 2), r,
+                                                          (int)st);
                 }
                 fs_yuv_graded++;
                 if (pc == FS_YUV_ADDR_STILL) fs_yuv_g_still++;
@@ -735,8 +757,8 @@ bare_done:
             fs_yuv_last_stride = (int)stride;
             fs_yuv_last_rows   = r;
 
-            fs_yuv_grade_ms = fs_yuvlook_apply((unsigned char *)a,
-                                               (int)(stride / 2), r, (int)stride);
+            fs_yuv_grade_ms = fs_yuv_grade_cached((void *)a, (int)(stride / 2),
+                                                  r, (int)stride);
             fs_yuv_graded++;
             if (pc == FS_YUV_ADDR_STILL) fs_yuv_g_still++;
             else if (pc == FS_YUV_ADDR_SSRAW) fs_yuv_g_ssraw++;

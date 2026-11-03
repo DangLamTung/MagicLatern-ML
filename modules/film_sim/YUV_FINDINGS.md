@@ -338,3 +338,35 @@ a full-frame pass is ~2 s through the cached alias, not the 191 clock-ms the log
 prints. Anything written here that quotes hook milliseconds has to say which of
 the two it means.
 
+
+## 13. Chroma is a signed byte: 0 is neutral, 128 is not
+
+One correction and one measurement, because getting this backwards is invisible
+in code review and garish on the panel.
+
+**The sensor-path buffers are signed.** `mean |chroma| = 12` over a real
+LiveView plane (`fs_yuv_stats`, 16 slices x 256 sample pairs of `LV_RAW.BIN`).
+That number is only possible if the chroma bytes cluster around zero: an
+offset-by-128 buffer would score ~100 there, and uninitialised memory scores 64.
+The same file decoded with `(signed char)` gives the frame in
+`film_eval/lvchroma/unpack_unsigned_vs_signed.png`; decoded as `byte - 128` it
+gives magenta and cyan. `fs_yuvlook_apply()` and `fs_core_process_rows()` have
+always read it signed.
+
+**So black is Y=0, U=0, V=0 -- every byte zero.** Measured through the same
+decode:
+
+    U=128 Y=0 V=128 Y=0  ->  RGB   0 135   0     saturated green
+    U=  0 Y=0 V=  0 Y=0  ->  RGB   0   0   0     black
+
+`fs_fill_black_yuv()` wrote the first pattern for one build, on the reasoning
+that UYVY chroma is unsigned, so the framing bars of that build could only have
+been green. That was never observed on the panel -- the two RGB values above are
+the evidence, and they were measured after the fact. It is `memset(0)` again.
+
+**One buffer is still unsigned, on purpose.** The play-mode YUV422 VRAM that
+`fs_view_*` writes is filled by Canon's **JPEG decoder**, and JPEG chroma is
+offset by 128; the LiveView plane comes off the ISP and is signed. No dump of
+the play-mode buffer has been taken, so its convention is *reasoned, not
+measured* -- the comment at `fs_view_px()` says so, and says what a wrong guess
+would look like (magenta and cyan instead of the picture).

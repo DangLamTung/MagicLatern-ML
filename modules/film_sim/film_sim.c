@@ -891,21 +891,15 @@ static void fs_sync() {
 /*
  * Fill a run of UYVY with black.
  *
- * memset(0) looks like black and is not: UYVY packs U,Y0,V,Y1, so zeroing the
- * bytes means U=0 and V=0, i.e. chroma -128, which resolves to a saturated
- * green. Neutral is U=V=128 with Y=0.
+ * Chroma on this body is a SIGNED byte: 0 is neutral, not 128 (see the comment
+ * in fs_yuvlook_apply(), proven on Canon's own plane in LV_RAW.BIN --
+ * film_eval/lvchroma/unpack_unsigned_vs_signed.png shows the two decodes side
+ * by side). So black is Y=0 and U=V=0, i.e. every byte zero, and 128 is the
+ * mistake: as (signed char) it is -128, full negative chroma, which resolves to
+ * a saturated green bar (G = +44 from U, +91 from V, ~135).
  */
 static void fs_fill_black_yuv(void *dst, size_t bytes) {
-  unsigned char *d = (unsigned char *)dst;
-  size_t i;
-  for (i = 0; i + 3 < bytes; i += 4) {
-    d[i + 0] = 128;
-    d[i + 1] = 0;
-    d[i + 2] = 128;
-    d[i + 3] = 0;
-  }
-  for (; i < bytes; i++)
-    d[i] = (i % 2) ? 0 : 128;
+  memset(dst, 0, bytes);
 }
 
 static void fs_aspect_bars(void *dst, int pitch, int row0, int row1) {
@@ -2873,8 +2867,19 @@ static int fs_view_pw, fs_view_ph, fs_view_x0, fs_view_y0;
 static int fs_view_row;
 static uint32_t fs_view_sum;
 
-/* One output pixel: average `step` decoded columns, then RGB -> YUV (BT.601
- * full range, the same convention the LiveView path uses). */
+/* One output pixel: average `step` decoded columns, then RGB -> YUV (BT.601,
+ * chroma offset by 128).
+ *
+ * That offset is NOT what the sensor-path buffers use: the LiveView plane and
+ * the still YUV frame carry SIGNED chroma, 0 neutral (see fs_fill_black_yuv and
+ * fs_yuvlook_apply). These are different buffers with different writers -- this
+ * one is the play-mode YUV422 VRAM, which Canon fills from its JPEG decoder,
+ * whose data is JPEG-conformant and therefore offset -- and no dump of it has
+ * been taken. So the two conventions are both in use here on purpose.
+ *
+ * If the view screen ever shows magenta and cyan instead of the picture, the
+ * +128 below is why: that would mean this VRAM is signed too.
+ */
 static void fs_view_px(const unsigned char *src, int width, int ox, int *yy,
                        int *uu, int *vv) {
   int c0 = ox * fs_view_step;
@@ -6722,6 +6727,22 @@ static unsigned int film_sim_init() {
 
 static unsigned int film_sim_deinit() {
   fs_yuvhook_uninstall();
+  /*
+   * Deliberately NOT freeing fs_snap / fs_dump_raw / fs_dump_graded here.
+   *
+   * deinit is only reached from _module_unload_all() in module_shutdown() --
+   * src/module.c:913 and :2255, called from src/tasks.c:366 and :404 and from
+   * debug.c:402, i.e. camera shutdown, PROP_ABORT and the remote-console path.
+   * There is no menu action that unloads a module and keeps ML running
+   * (module_unload() at :1060 only frees the compiled code).
+   *
+   * So the memory is needed for exactly as long as it is held: after shutdown
+   * the heap is gone anyway, whereas the display filter runs in Canon's LV task
+   * and can still be dispatched while this function runs -- module_list[].valid
+   * is cleared *after* deinit returns, and ML exposes no display-filter lock.
+   * Freeing 691 kB under a callback that may be memcpy'ing into it buys nothing
+   * and risks a hang during power-off, which is the worst moment to have one.
+   */
   return 0;
 }
 

@@ -25,5 +25,13 @@ SPLIT_SH  16,7,-4
 SPLIT_HI  14,9,-7
 HALATION  46 228 16
 HAL_TINT  255,96,48
-GRAIN     20
+# 14, not 20: at 20 the grain read as blotches on a smooth subject, which is
+# not what a 400-speed colour negative does. Measured on a flat patch, the
+# high-frequency std goes 15.28 at 20 and 13.80 at 14 with everything else
+# equal, and the difference is obvious at 1:1.
+GRAIN     14
+# GRAIN_SIZE only moves the grain cell at a full-scale develop: the cell is
+# derived as 1 + size/12 and then divided by the decode scale, so at the
+# default half-scale decode 36 and 24 both land on 2 px and produce
+# byte-identical files.
 GRAIN_SIZE 36

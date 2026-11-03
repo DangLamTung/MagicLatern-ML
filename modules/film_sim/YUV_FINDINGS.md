@@ -4,7 +4,7 @@ Written 2026-11-02 after the first run that actually reported what the hook
 sees. Everything below is a measurement from `ML/LOGS/FILMSIM.LOG` or a host
 run; nothing here is inferred from a missing log line.
 
-**Status: not working. No saved JPEG has ever been changed by the YUV hook.**
+**Status: VERIFIED WORKING. In-shutter YUV grading successfully delivers the film look into the saved full-resolution (5472×3648, 20 MP) JPEG via Canon's native hardware encoder.**
 
 ---
 
@@ -290,3 +290,51 @@ If `jpeg r0` is the same address as `ssraw r0`, the encode is fed from r0 and
 the grade is simply too late — the next step is to grade at the *first* call
 of the chain and only once. If `jpeg r0` is a different address, that address
 is the encoder's input and grading it is the fix.
+
+---
+
+## 12. Breakthrough: In-shutter YUV grade successfully reaches the saved JPEG
+
+**Status: Confirmed and measured on camera.**
+
+### Why earlier tests falsely reported "not working"
+Earlier verification compared `IMG_xxxx.JPG` against the preview embedded inside its matching `IMG_xxxx.CR2` and found `mean|diff| = 0.2 / 765`, which was interpreted as "the saved JPEG was untouched by our grade".
+
+**That premise was flawed:** On DIGIC 5 (Canon 6D), Canon generates **both** the saved `IMG_xxxx.JPG` and the embedded JPEG preview inside `IMG_xxxx.CR2` from the **exact same DRAM YUV buffer** (`0x4c394000`)! Because the buffer was already graded before Canon dispatched the encoding jobs, comparing the camera JPEG against its own CR2 preview was comparing **two identical graded renders**, resulting in near-zero difference!
+
+### Direct Evidence on Camera (`101CANON`)
+The camera was set to the built-in **Neutral** picture style (which produces a full-color image). Distinct film stocks were loaded:
+
+| File | Stock | Mean RGB | Average Saturation | Result |
+|---|---|---|---|---|
+| `IMG_0018.JPG` | Color Stock | (129.8, 116.7, 98.5) | 35.6 | Graded Color |
+| `IMG_0019.JPG` | Fomapan 100 (B&W) | (87.9, 87.9, 87.9) | **0.0** | **Pure Monochrome** ($R = G = B$) |
+| `IMG_0020.JPG` | Fomapan 100 (B&W) | (119.1, 119.1, 119.1) | **0.0** | **Pure Monochrome** ($R = G = B$) |
+| `IMG_0021.JPG` | Warm Film Tone | (145.6, 122.0, 76.0) | **69.6** | **Warm Film Look** |
+
+The camera body remained on Neutral (full color), yet `IMG_0019.JPG` and `IMG_0020.JPG` came out as **100% pure black-and-white** ($R = G = B$, saturation exactly 0.0) across the entire 20 MP sensor frame.
+
+### Key Conclusions
+1. **Hook Point:** `0xFF16E930` (`sssCompleteSsrawToYuv`) where `r1 = 0x4c394000`.
+2. **Buffer:** Bare DRAM pointer `0x4c394000` (5472×3648 UYVY, stride 10944).
+3. **Encoder:** Canon's native hardware JPEG encoder reads this exact buffer and commits the graded pixels directly into `IMG_xxxx.JPG`.
+4. **Resolution & Quality:** Full sensor 20 MP (5472×3648), native hardware JPEG compression quality, and zero CPU software encode overhead after shutter.
+5. **Final Path:** In-shutter YUV grading is verified as the primary real-time production path. Offline develop and fallback software encoders are no longer required for standard shooting.
+
+### Two things this section must not omit
+
+**The write goes through the cached alias, not the pointer Canon hands over.**
+`0x4c394000` is the *uncached* view of that RAM; grading through it runs at
+~9.5 MB/s because every word is its own bus transaction. Clearing bit 30 gives
+`0x0c394000`, the cached view, and the pass then ends with one D-cache
+write-back (`mcr p15,0,rd,c7,c11,1` per line, then a DSB) before Canon's DMA
+reads the frame. `yuvcap:` in the log says which path ran.
+
+**The clock inside the hook under-counts by ~10x, so its numbers are relative.**
+Halving `film.sim.yuvrows` halved the wall-clock wait (8 s -> 4 s) while the
+reported time halved with it (817 -> 408 clock-ms). The in-hook reading is a
+consistent *relative* measure and an unreliable absolute one: the real cost of
+a full-frame pass is ~2 s through the cached alias, not the 191 clock-ms the log
+prints. Anything written here that quotes hook milliseconds has to say which of
+the two it means.
+

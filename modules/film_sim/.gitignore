@@ -22,3 +22,6 @@ tools/sim/*.png
 # Frame dumps and slot backups copied off the camera
 *.BIN
 SLOT*.BIN
+
+# Calibration output: regenerate with tools/calib/calibrate.py
+modules/film_sim/tools/calib/out/

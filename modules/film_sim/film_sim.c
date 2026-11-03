@@ -3383,10 +3383,21 @@ static void fs_bmp_probe(const char *tag) {
       nz++;
     sum = sum * 31u + v;
   }
+  /*
+   * Sample the idle buffer too. With film.sim.direct = 0 the frame is drawn
+   * there and then copied to real, so "drawn but not shown" and "never drawn"
+   * look identical in the real buffer alone -- and telling those apart is the
+   * whole point of this probe.
+   */
+  int nzi = 0;
+  if (idle)
+    for (int i = 0; i < 720 * 480; i += 1009)
+      if (idle[i])
+        nzi++;
   /* %p prints a bare "p" in this libc; the addresses are the whole point. */
-  fs_log("%s: bmp real=0x%x idle=0x%x sampled=%d nonzero=%d sum=0x%08x "
-         "pal[9]=0x%08x pal[38]=0x%08x pal[80]=0x%08x pal[200]=0x%08x",
-         tag, (unsigned)real, (unsigned)idle, n, nz, sum,
+  fs_log("%s: bmp real=0x%x idle=0x%x sampled=%d nonzero=%d nzidle=%d "
+         "sum=0x%08x pal[9]=0x%08x pal[38]=0x%08x pal[80]=0x%08x pal[200]=0x%08x",
+         tag, (unsigned)real, (unsigned)idle, n, nz, nzi, sum,
          LCD_Palette[3 * 9 + 2], LCD_Palette[3 * 38 + 2],
          LCD_Palette[3 * 80 + 2], LCD_Palette[3 * 200 + 2]);
   fs_log_flush();

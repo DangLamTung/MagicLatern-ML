@@ -2146,21 +2146,6 @@ static struct menu_entry film_sim_lv_menu[] = {
         .children = film_sim_liveview_children,
     },
     {
-        .name = "Palette Test",
-        .priv = &film_sim_calib,
-        .max = 1,
-        .help = "Paint eleven palette bars when a screen opens, blue where a "
-                "colour cannot be shown. Diagnostic.",
-    },
-    {
-        .name = "Direct Draw",
-        .priv = &film_sim_direct,
-        .max = 1,
-        .help =
-            "Draw straight into the display buffer instead of the idle copy. "
-            "Off restores ML's double-buffered path.",
-    },
-    {
         .name = "Canister Art",
         .priv = &film_sim_art,
         .max = 1,
@@ -6015,12 +6000,6 @@ static MENU_SELECT_FUNC(fs_compare_trigger) {
 
 static struct menu_entry fs_menu_develop[] = {
     {
-        .name = "Film Shelf",
-        .select = fs_gui_open,
-        .icon_type = IT_ACTION,
-        .help = "Interactive shelf: browse stocks, watch the roll.",
-    },
-    {
         .name = "Darkroom",
         .select = fs_darkroom_open,
         .icon_type = IT_ACTION,
@@ -6113,7 +6092,7 @@ static struct menu_entry fs_menu_debug[] = {
 /* The develop side: choose a frame, a film and run the engine. */
 static struct menu_entry film_sim_menu[] = {
     {
-        .name = "Film Shelf (GUI)",
+        .name = "Film Shelf",
         .select = fs_gui_open,
         .icon_type = IT_ACTION,
         .help = "Open the shelf, choose a film, SET applies it. The choice "

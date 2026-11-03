@@ -940,6 +940,8 @@ static void fs_sync() {
   if (film_sim_yuvrows > 0) {
     fs_yuvlook_dirty = 1;
   }
+  /* Framing is an aspect mode: the hook needs it even when nothing else moved. */
+  fs_yuvhook_bars(film_sim_aspect);
 }
 
 /*
@@ -950,86 +952,17 @@ static void fs_sync() {
  * 16:9 keeps the full width and takes 9/16 of it in height; XPan is 65:24.
  */
 /*
- * Fill a run of UYVY with black.
+ * Aspect framing for LiveView.
  *
- * Chroma on this body is a SIGNED byte: 0 is neutral, not 128 (see the comment
- * in fs_yuvlook_apply(), proven on Canon's own plane in LV_RAW.BIN --
- * film_eval/lvchroma/unpack_unsigned_vs_signed.png shows the two decodes side
- * by side). So black is Y=0 and U=V=0, i.e. every byte zero, and 128 is the
- * mistake: as (signed char) it is -128, full negative chroma, which resolves to
- * a saturated green bar (G = +44 from U, +91 from V, ~135).
+ * The geometry lives in fs_core_aspect_bars() because the in-shutter burn uses
+ * the same function: the bars drawn on the preview and the bars written into
+ * the frame Canon encodes have to be in the same place.
  */
-static void fs_fill_black_yuv(void *dst, size_t bytes) {
-  memset(dst, 0, bytes);
-}
-
 static void fs_aspect_bars(void *dst, int pitch, int row0, int row1) {
-  int mode = film_sim_aspect;
-  if (mode <= 0 || !dst || pitch <= 0)
-    return;
-
-  int width_px = pitch / 2;
-  int active = row1 - row0;
-
-  /* same shapes the file crop uses */
   int num, den;
-  switch (mode) {
-  case 1:
-    num = 1;
-    den = 1;
-    break; /* 1:1  */
-  case 2:
-    num = 5;
-    den = 4;
-    break; /* 4:5  */
-  case 3:
-    num = 16;
-    den = 9;
-    break; /* 9:16 */
-  case 4:
-    num = 9;
-    den = 16;
-    break; /* 16:9 */
-  case 5:
-    num = 24;
-    den = 65;
-    break; /* XPan */
-  default:
+  if (!fs_core_aspect_ratio(film_sim_aspect, &num, &den))
     return;
-  }
-
-  int box_h = (width_px * num) / den;
-  if (box_h <= 0)
-    return;
-
-  if (box_h < active) {
-    int top = row0 + (active - box_h) / 2;
-    int bot = top + box_h;
-    for (int y = row0; y < top; y++)
-      fs_fill_black_yuv((char *)dst + (size_t)y * pitch, (size_t)pitch);
-    for (int y = bot; y < row1; y++)
-      fs_fill_black_yuv((char *)dst + (size_t)y * pitch, (size_t)pitch);
-    return;
-  }
-
-  /* taller than the panel: bars on the sides, two pixels per UYVY word */
-  int box_w = (active * den) / num;
-  if (box_w <= 0 || box_w >= width_px)
-    return;
-  /* Even pixel boundaries, because a UYVY word holds the chroma of two pixels:
-   * an odd edge zeroes the U of one pair and leaves its V, which paints a
-   * one-column colour error down the bar. 9:16 lands on left = 225 uncorrected. */
-  int left = ((width_px - box_w) / 2) & ~1;
-  int right = (left + box_w + 1) & ~1;
-  if (right > width_px)
-    right = width_px;
-  for (int y = row0; y < row1; y++) {
-    unsigned char *r = (unsigned char *)dst + (size_t)y * pitch;
-    if (left > 0)
-      fs_fill_black_yuv(r, (size_t)left * 2);
-    if (right < width_px)
-      fs_fill_black_yuv(r + right * 2, (size_t)(width_px - right) * 2);
-  }
+  fs_core_aspect_bars(dst, pitch, pitch / 2, row0, row1, num, den);
 }
 
 static void FAST fs_process_frame(void *src, void *dst) {
@@ -2005,6 +1938,7 @@ static void fs_slot_backup_task(void *unused) {
            * any stock change, so a stock capture style got the engine's look
            * applied on top of it -- measured on IMG_9973_F.JPG, sat 63.2
            * against the camera JPEG's 29.6. */
+          fs_yuvhook_bars(film_sim_aspect);
           fs_yuvhook_grade(fs_grade_in_shutter() ? film_sim_yuvrows : 0);
         }
       }
@@ -6277,7 +6211,7 @@ static void fs_lv_monitor_task(void *unused) {
                  fs_yuvhook_hook_total_ms(), (int)fs_yuvhook_hook_ms(),
                  fs_yuvhook_hook_total_max(), (int)fs_yuvhook_grade_ms(),
                  GetFreeMemForMalloc() / 1024);
-          fs_log("yuvcap: cache alias %s; camera style 0x%02x (%s); engine look %s",
+          fs_log("yuvcap: cache alias %s; camera style 0x%02x (%s); engine look %s; bars %d",
                  fs_yuvhook_dcache_used() ? "used (bit 30 cleared, D-cache cleaned)"
                                           : "NOT used",
                  (unsigned)lens_info.raw_picstyle,
@@ -6287,7 +6221,8 @@ static void fs_lv_monitor_task(void *unused) {
                    : lens_info.raw_picstyle == 0x23 ? "User Def 3"
                    : "other",
                  fs_grade_in_shutter() ? "is the only look expected in the JPEG"
-                                       : "adds to the stock written into the style");
+                                       : "adds to the stock written into the style",
+                 fs_yuvhook_bars_burned());
           fs_log("yuvsites: pq=%08x (size lo=%d hi=%d) | jpeg r0=%08x r1=%08x diag %d "
                  "| ssraw r0=%08x r1=%08x diag %d",
                  (unsigned)fs_yuvhook_pic_quality(),
@@ -6522,6 +6457,7 @@ static unsigned int film_sim_init() {
          * JPEG -- that comparison is what says whether we are looking at the
          * frame Canon encodes.
          */
+        fs_yuvhook_bars(film_sim_aspect);
         fs_yuvhook_grade(fs_grade_in_shutter() ? film_sim_yuvrows : 0);
         fs_log("yuvgrade: in-shutter grade %s (capture style %s)",
                fs_grade_in_shutter() ? "ON" : "off",

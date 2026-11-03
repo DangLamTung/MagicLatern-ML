@@ -19,6 +19,8 @@
 #ifndef FS_CORE_H
 #define FS_CORE_H
 
+#include <string.h>
+
 enum
 {
     FS_PRESET_NEUTRAL = 0,
@@ -217,6 +219,69 @@ __attribute__((always_inline)) static inline unsigned int fs_pack_px(int u, int 
          | (unsigned int)(fs_clamp_i(y0, 0, 255) <<  8)
          | ((unsigned int)(unsigned char)(signed char) fs_clamp_i(v, -128, 127) << 16)
          | (unsigned int)(fs_clamp_i(y1, 0, 255) << 24);
+}
+
+
+/* Aspect mode -> ratio. 0 means "no bars". */
+static int fs_core_aspect_ratio(int mode, int *num, int *den)
+{
+    switch (mode) {
+    case 1: *num = 1;  *den = 1;  return 1;   /* 1:1   */
+    case 2: *num = 5;  *den = 4;  return 1;   /* 4:5   */
+    case 3: *num = 16; *den = 9;  return 1;   /* 9:16  */
+    case 4: *num = 9;  *den = 16; return 1;   /* 16:9  */
+    case 5: *num = 24; *den = 65; return 1;   /* XPan  */
+    default: return 0;
+    }
+}
+
+/*
+ * Black bars for a num:den frame inside a width_px wide, row0..row1 tall area of
+ * a UYVY image. Shared by the LiveView overlay and the in-shutter burn, so the
+ * preview and the file cannot disagree about where the frame is.
+ *
+ * Chroma is a signed byte with 0 neutral on these buffers, so black is a zero
+ * fill. A UYVY word carries the chroma of two pixels, so the side-bar edges are
+ * rounded to even pixels: an odd edge zeroes the U of one pair and leaves its V,
+ * which paints a one-column colour error down the whole bar.
+ */
+static void fs_core_aspect_bars(void *dst, int pitch, int width_px,
+                                int row0, int row1, int num, int den)
+{
+    int active = row1 - row0;
+    int box_h, box_w, left, right;
+
+    if (!dst || pitch <= 0 || width_px <= 0 || active <= 0 || num <= 0 || den <= 0)
+        return;
+
+    box_h = (width_px * num) / den;
+    if (box_h <= 0)
+        return;
+
+    if (box_h < active) {
+        int top = row0 + (active - box_h) / 2;
+        int bot = top + box_h;
+        for (int y = row0; y < top; y++)
+            memset((char *)dst + (size_t)y * pitch, 0, (size_t)pitch);
+        for (int y = bot; y < row1; y++)
+            memset((char *)dst + (size_t)y * pitch, 0, (size_t)pitch);
+        return;
+    }
+
+    box_w = (active * den) / num;
+    if (box_w <= 0 || box_w >= width_px)
+        return;
+    left = ((width_px - box_w) / 2) & ~1;
+    right = (left + box_w + 1) & ~1;
+    if (right > width_px)
+        right = width_px;
+    for (int y = row0; y < row1; y++) {
+        unsigned char *r = (unsigned char *)dst + (size_t)y * pitch;
+        if (left > 0)
+            memset(r, 0, (size_t)left * 2);
+        if (right < width_px)
+            memset(r + right * 2, 0, (size_t)(width_px - right) * 2);
+    }
 }
 
 /* Process rows [row0, row1) of a UYVY frame.  pitch is in bytes. */

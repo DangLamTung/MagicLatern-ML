@@ -49,6 +49,8 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "fs_core.h"
+
 #include "fs_yuvhook.h"
 #include "fs_yuvlook.h"
 
@@ -73,6 +75,21 @@ static uint32_t fs_hook_ms = 0;   /* when the hook last ran, for save timing */
  * shot that used the alias made every later line claim the same. */
 static int fs_dcache_used = 0;
 
+/*
+ * Aspect bars, burned into the frame Canon is about to encode.
+ *
+ * The camera has no stills aspect setting (nothing in src/property.h nor in the
+ * 6D platform headers), so the only way a shot carries a ratio is to put black
+ * in the pixels. That is one memset per bar -- 6 MB for 16:9 at full size --
+ * through the cacheable alias, before the D-cache write-back hands the frame
+ * over. The preview draws the same bars with the same function.
+ */
+static int fs_bars_mode = 0;
+static int fs_bars_burned = 0;
+
+void fs_yuvhook_bars(int mode) { fs_bars_mode = mode; }
+int fs_yuvhook_bars_burned(void) { return fs_bars_burned; }
+
 static void fs_dcache_clean(void *p, uint32_t len)
 {
     uint32_t a = (uint32_t)p & ~31u;
@@ -94,7 +111,8 @@ int fs_yuvhook_dcache_used(void) { return fs_dcache_used; }
  * never ran on this body (every log so far shows a bare r0), which is exactly
  * why the difference went unnoticed.
  */
-static uint32_t fs_yuv_grade_cached(void *buf, int width, int rows, int stride)
+static uint32_t fs_yuv_grade_cached(void *buf, int width, int rows, int stride,
+                                    int frame_h)
 {
     uint32_t ba = (uint32_t)buf;
     unsigned char *gp = (unsigned char *)buf;
@@ -107,6 +125,18 @@ static uint32_t fs_yuv_grade_cached(void *buf, int width, int rows, int stride)
         gp = (unsigned char *)CACHEABLE(buf);
     fs_dcache_used = (gp != (unsigned char *)buf);
     ms = fs_yuvlook_apply(gp, width, rows, stride);
+
+    if (fs_bars_mode > 0) {
+        int num, den;
+        /* Geometry from the whole frame, not from the rows this pass graded:
+         * a partial grade (film.sim.yuvrows) would put the bars in the wrong
+         * place. If the two differ the bars are skipped rather than guessed. */
+        if (rows == frame_h && fs_core_aspect_ratio(fs_bars_mode, &num, &den)) {
+            fs_core_aspect_bars(gp, stride, width, 0, rows, num, den);
+            fs_bars_burned++;
+        }
+    }
+
     if (gp != (unsigned char *)buf)
         fs_dcache_clean(gp, (uint32_t)rows * stride);
     return ms;
@@ -716,8 +746,8 @@ static void fs_yuv_hook_body(uint32_t *regs, uint32_t *stack, uint32_t pc)
                 fs_yuv_last_stride = (int)st;
                 fs_yuv_last_rows   = r;
                 {
-                    fs_yuv_grade_ms = fs_yuv_grade_cached(buf, (int)(st / 2), r,
-                                                          (int)st);
+                    fs_yuv_grade_ms = fs_yuv_grade_cached(
+                        buf, (int)(st / 2), r, (int)st, (int)(pb / st));
                 }
                 fs_yuv_graded++;
                 if (pc == FS_YUV_ADDR_STILL) fs_yuv_g_still++;
@@ -759,7 +789,8 @@ bare_done:
             fs_yuv_last_rows   = r;
 
             fs_yuv_grade_ms = fs_yuv_grade_cached((void *)a, (int)(stride / 2),
-                                                  r, (int)stride);
+                                                  r, (int)stride,
+                                                  (int)(pb / stride));
             fs_yuv_graded++;
             if (pc == FS_YUV_ADDR_STILL) fs_yuv_g_still++;
             else if (pc == FS_YUV_ADDR_SSRAW) fs_yuv_g_ssraw++;

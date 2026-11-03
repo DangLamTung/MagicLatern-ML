@@ -29,6 +29,9 @@ int  fs_yuvhook_write(const char *path);   /* 1 = written */
  * fs_yuvhook_grade_ms() after the dump is written.
  */
 void fs_yuvhook_grade(int rows);
+/* Aspect mode (see fs_core_aspect_ratio) to burn into the shot, 0 = none. */
+void fs_yuvhook_bars(int mode);
+int fs_yuvhook_bars_burned(void);
 uint32_t fs_yuvhook_grade_ms(void);
 
 uint32_t fs_yuvhook_hook_ms(void);  /* get_ms_clock() when the hook last ran */

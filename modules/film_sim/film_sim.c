@@ -109,19 +109,30 @@ static CONFIG_INT("film.sim.yuvprobe", film_sim_yuvprobe, 0);
  * Default 3648 rows (full 5472x3648 still frame). */
 static CONFIG_INT("film.sim.yuvrows", film_sim_yuvrows, 3648);
 /*
- * Force a Neutral picture style at capture.
+ * Neutral base at capture, and the switch that arms the in-shutter grade.
  *
- * The reason it exists is sound: if the style already applied the look and the
- * engine grades the same frame afterwards, the frame is graded twice.  But that
- * only holds when the engine's grade actually reaches the file, and on this
- * body it does not -- the hook grades the YUV and Canon encodes a different
- * picture.  So the sequence was: style forced to Neutral (base 0x84, contrast
- * 0), the graded pixels never arrive, and every JPEG came out flat.
+ * Two mechanisms can put the look into a JPEG and they must not both run:
  *
- * Off by default now: the stock is written into the picture style, so the
- * camera bakes a real look into the JPEG it shoots.  Turn it ON when
- * film.sim.shotgrade has been proven, i.e. when a saved JPEG has been measured
- * to carry the engine's look.
+ *   off (default) -- the stock's sliders are written into the picture style,
+ *                    so Canon applies the look while it builds the YUV.
+ *   on            -- the style is forced to built-in Neutral (base 0x84; also
+ *                    needs film.sim.capture and a level above "style only")
+ *                    and fs_yuvhook_grade() is armed, so the frame is graded
+ *                    inside sssCompleteSsrawToYuv, after Canon's style has
+ *                    already shaped it (see fs_yuvhook.c).
+ *
+ * Hence the gate is on the style, not on the grade: grading a frame that a
+ * stock style already graded gives two looks stacked. Measured with the gate
+ * missing: IMG_9973_F.JPG sat 63.2 against 29.6 in the camera's own JPEG of the
+ * same shot.
+ *
+ * The grade does reach the file: a black-and-white recipe in this mode gives a
+ * JPEG with R = G = B over the whole 5472x3648 frame. Read it together with the
+ * "yuvcap" line from the same run -- the capture style must be built-in Neutral
+ * (0x84), otherwise Canon's own Monochrome style (0x86) could be the source. The
+ * log lines to check are
+ * "yuvgrade: in-shutter grade ON (capture style Neutral)", and
+ * "yuvcap: cache alias used ..." says how it wrote the buffer.
  */
 static CONFIG_INT("film.sim.neutralcap", film_sim_neutralcap, 0);
 
@@ -2254,18 +2265,22 @@ static CONFIG_INT("film.sim.auto", film_sim_auto, 0);
  */
 static CONFIG_INT("film.sim.replace", film_sim_replace, 1);
 /*
- * Has the shutter grade been PROVEN to reach the file?
+ * May a shot that incremented the hook's counter skip the develop?
  *
- * This gates one thing only: whether a shot that incremented the hook's
- * counter may skip the develop.  It may not, until someone has compared a
- * shot's JPEG with the preview inside its own CR2 and found them different --
- * every measurement so far has found them the same (mean |diff| ~1/765, which
- * is re-encode noise), so the counter is a claim, not evidence, and trusting
- * it means the file stays ungraded with a log line saying it was.
+ * Only a hint, because the check it was waiting for cannot work: a shot's JPEG
+ * and the preview inside its own CR2 are encoded from the *same* YUV buffer by
+ * the same Canon block, so comparing them always gives re-encode noise
+ * (mean |diff| ~1/765) whether the grade ran or not. That comparison was made,
+ * saw nothing, and produced the wrong conclusion -- "the pixels never arrive".
  *
- * Set to 1 only after that comparison passes.  With this at 0 and Auto
- * Develop on, the JPEG on the card is the graded one either way: the shutter
- * path if it worked, the develop if it did not.
+ * The check that does work is a black-and-white recipe: if the shot's JPEG
+ * comes back R = G = B over the whole frame (saturation 0.0) and "yuvcap" from
+ * the same run logged the capture style as built-in Neutral, Canon's encoder
+ * consumed graded pixels -- a monochrome *style* would have logged 0x86. With a colour stock it cannot be done that way, so
+ * trust "yuvgrade: in-shutter grade ON" plus "yuvcap: cache alias used" in
+ * ML/LOGS/FILMSIM.LOG, and keep this at 0 until the file itself has been
+ * measured. With it at 0 and Auto Develop on, the JPEG is graded either way:
+ * the in-shutter path if it ran, the develop if it did not.
  */
 static CONFIG_INT("film.sim.shotgrade", film_sim_shotgrade, 0);
 
@@ -2273,9 +2288,12 @@ static CONFIG_INT("film.sim.shotgrade", film_sim_shotgrade, 0);
  * Write a JPEG from the frame the camera built, after grading it in place.
  *
  * This is the shot path's exit and it does not open the CR2: the pixels are
- * already in RAM and already graded, so the file costs an encode, not a
- * decode. Off means "grade the buffer and trust Canon to encode it", which is
- * what every build before this one did -- and not one saved JPEG ever changed.
+ * already in RAM and already graded, so the file costs one encode, not a
+ * decode. Off means "grade the buffer and trust Canon's encoder to read it".
+ * To check that on a card, use a black-and-white recipe: the shot must come
+ * back R = G = B over the whole frame, and "yuvcap" from the same run must log
+ * the capture style as built-in Neutral (0x84) -- with 0x86 it would be Canon's
+ * Monochrome style instead, and the pixels would prove nothing.
  */
 /* 1 = full resolution, 2 = half (4x less encode work). 20 MP did not finish
  * inside the time the camera stayed on, and the cost is linear in pixels. */

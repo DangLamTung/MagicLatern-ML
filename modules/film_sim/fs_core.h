@@ -87,7 +87,7 @@ typedef struct
     int grain_amp;              /* 0..85 */
 } fs_lut_t;
 
-static inline int fs_clamp_i(int v, int lo, int hi)
+__attribute__((always_inline)) static inline int fs_clamp_i(int v, int lo, int hi)
 {
     return v < lo ? lo : (v > hi ? hi : v);
 }
@@ -207,7 +207,11 @@ static inline int fs_chroma_signed(unsigned int byte)
     return (signed char) byte;
 }
 
-static inline unsigned int fs_pack_px(int u, int y0, int v, int y1)
+/* always_inline, because at -Os gcc turns every call of this into a `bl`:
+ * one function call per UYVY pair, 172,800 of them per LiveView frame. The
+ * ARM listing of the LV loop showed exactly that, with the matrix coefficients
+ * and table pointers spilled to the stack around each call. */
+__attribute__((always_inline)) static inline unsigned int fs_pack_px(int u, int y0, int v, int y1)
 {
     return ((unsigned int)(unsigned char)(signed char) fs_clamp_i(u, -128, 127))
          | (unsigned int)(fs_clamp_i(y0, 0, 255) <<  8)
@@ -242,6 +246,10 @@ static void fs_core_process_rows(const fs_lut_t *lut, const void *src, void *dst
     const int m0 = lut->matrix[0], m1 = lut->matrix[1];
     const int m2 = lut->matrix[2], m3 = lut->matrix[3];
     const int grain = lut->grain_amp;
+    /* A stock with no hue rotation has matrix = [256,0,0,256], where the
+     * multiply is the identity. Most B&W and flat stocks do, and the LiveView
+     * path is arithmetic-bound (89 ms of a 101 ms pass), so skip it. */
+    const int idmat = (m0 == 256 && m1 == 0 && m2 == 0 && m3 == 256);
 
     for (int y = row0; y < row1; y++)
     {
@@ -260,8 +268,14 @@ static void fs_core_process_rows(const fs_lut_t *lut, const void *src, void *dst
                 int ob = curve[yb];
                 int ym = (oa + ob) >> 1;
 
-                int nu = ((m0 * u + m1 * v) >> 8);
-                int nv = ((m2 * u + m3 * v) >> 8);
+                int nu, nv;
+                if (idmat) {
+                    nu = u;
+                    nv = v;
+                } else {
+                    nu = ((m0 * u + m1 * v) >> 8);
+                    nv = ((m2 * u + m3 * v) >> 8);
+                }
 
                 int sat = sat_t[ym];
                 nu = ((nu * sat) >> 7) + cb_t[ym];

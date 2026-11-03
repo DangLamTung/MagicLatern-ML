@@ -55,6 +55,7 @@ static inline int fs_ends_with(const char *str, const char *suffix) {
 }
 
 static CONFIG_INT("film.sim.enable", film_sim_enable, 1);
+
 static CONFIG_INT("film.sim.preset", film_sim_preset, FS_PRESET_FUJI_SUPERIA);
 static CONFIG_INT("film.sim.stock", film_sim_stock, 1);
 static CONFIG_INT("film.sim.strength", film_sim_strength, 100);
@@ -115,11 +116,12 @@ static CONFIG_INT("film.sim.yuvrows", film_sim_yuvrows, 3648);
  *
  *   off (default) -- the stock's sliders are written into the picture style,
  *                    so Canon applies the look while it builds the YUV.
- *   on            -- the style is forced to built-in Neutral (base 0x84; also
- *                    needs film.sim.capture and a level above "style only")
- *                    and fs_yuvhook_grade() is armed, so the frame is graded
+ *   on            -- the style is forced to built-in Neutral (base 0x84) and
+ *                    fs_yuvhook_grade() is armed, so the frame is graded
  *                    inside sssCompleteSsrawToYuv, after Canon's style has
- *                    already shaped it (see fs_yuvhook.c).
+ *                    already shaped it (see fs_yuvhook.c). Either this key or
+ *                    film.sim.capture arms it, and never at level 1 -- the two
+ *                    are aliases, see fs_grade_in_shutter().
  *
  * Hence the gate is on the style, not on the grade: grading a frame that a
  * stock style already graded gives two looks stacked. Measured with the gate
@@ -135,6 +137,56 @@ static CONFIG_INT("film.sim.yuvrows", film_sim_yuvrows, 3648);
  * "yuvcap: cache alias used ..." says how it wrote the buffer.
  */
 static CONFIG_INT("film.sim.neutralcap", film_sim_neutralcap, 0);
+
+/* The CR2's embedded JPEG is rendered through the active picture style, and
+ * Develop decodes that same JPEG. If the style already applies the film look,
+ * the .fs applies it a second time -- measured 20.8/255 for Velvia and
+ * 23.5/255 for CineStill 800T on real captures. Neutral leaves base, sliders,
+ * Kelvin and WB shift at Canon defaults so the recipe is the only grading.
+ * This is the key the "Neutral Capture" menu item writes; film.sim.neutralcap
+ * is the cfg alias for the same thing. */
+static CONFIG_INT("film.sim.capture", film_sim_capture, 0);
+/*
+ * How much of the pipeline the develop uses.
+ *
+ *   1  picture style only: the look is written into the style slots and the
+ *      camera bakes it into the JPEG it shoots. Nothing to develop, no cost.
+ *   2  style + our grade: the style does the base colour, the engine adds
+ *      curves, hue axes, split tone, halation and grain on the preview JPEG.
+ *   3  raw develop: the sensor data is decoded and graded from scratch -- no
+ *      picture style involved at all. Both payloads this body writes are
+ *      handled: a mosaic frame, and the mRAW the 6D actually stores.
+ */
+#define FS_LEVEL_STYLE 1
+#define FS_LEVEL_GRADE 2
+#define FS_LEVEL_RAW 3
+static CONFIG_INT("film.sim.level", film_sim_level, FS_LEVEL_GRADE);
+
+/*
+ * Is the look applied inside the shot?
+ *
+ * One predicate, because four places have to agree and used to not: the style
+ * is forced to built-in Neutral, the stock's sliders are not written into the
+ * style, the PF2 blob is not injected, and the hook is armed. Any one of them
+ * disagreeing grades the frame twice -- Canon's style and then the engine --
+ * which measured 20.8/255 on Velvia and saturation 63.2 against the camera's
+ * own 29.6 on IMG_9973_F.
+ *
+ * The reverse case matters just as much: at level 1 the style IS the look (no
+ * develop runs), so this must be false there.
+ *
+ * Two keys ask for the same thing and either one is enough: film.sim.capture is
+ * what the "Neutral Capture" menu item writes, film.sim.neutralcap is the cfg
+ * key that older cards carry. Treating them as an OR means neither can be set
+ * without the other half of the job following it -- a menu switch that silently
+ * did nothing (capture=1, neutralcap=0 shot a flat Neutral JPEG with no look at
+ * all) and a cfg key that graded on top of a stock style (neutralcap=1,
+ * capture=0) were both reachable before this.
+ */
+static int fs_grade_in_shutter(void) {
+  return (film_sim_capture || film_sim_neutralcap) &&
+         film_sim_level != FS_LEVEL_STYLE;
+}
 
 /*
  * Queue mode: develop when the camera is idle instead of when the shot is
@@ -180,8 +232,6 @@ static volatile int fs_yuvlook_dirty = 0;
 static int fs_active_stock_path(char *stk, int cap, const film_xml_t **out_f);
 static volatile int fs_slot1_avail = 0;
 static volatile int fs_force_dump_log = 0;
-static volatile int fs_force_ps_dump = 0;
-static volatile int fs_force_render_test = 0;
 
 /*
  * The register the LiveView panel scans out of.
@@ -1396,22 +1446,7 @@ static MENU_UPDATE_FUNC(fs_aspect_update) {
   MENU_SET_ICON(a ? MNI_ON : MNI_OFF, 0);
 }
 
-static MENU_UPDATE_FUNC(fs_main_update) {
-  int p = fs_clamp_i(film_sim_preset, 0, FS_PRESET_COUNT - 1);
-  if (film_sim_enable) {
-    MENU_SET_VALUE("%s", fs_preset_names[p]);
-    MENU_SET_ICON(MNI_ON, 0);
-  } else {
-    MENU_SET_VALUE("OFF");
-    MENU_SET_ICON(MNI_OFF, 0);
-  }
-}
 
-static MENU_SELECT_FUNC(fs_main_toggle) {
-  menu_numeric_toggle(&film_sim_enable, delta, 0, 1);
-  fs_signature_valid = 0;
-  fs_valid_frame = 0;
-}
 
 static MENU_UPDATE_FUNC(fs_enable_update) {
   if (film_sim_enable && !get_global_draw()) {
@@ -1523,96 +1558,15 @@ static MENU_UPDATE_FUNC(fs_canon_contrast_update) {
   }
 }
 
-static void fs_canon_saturation_toggle(void *priv, int delta) {
-  int s = picstyle_get_current_saturation();
-  if (s < -4 || s > 4)
-    s = 0;
-  s = fs_clamp_i(s + delta, -4, 4);
-  picstyle_set_current_saturation(s);
-}
 
-static MENU_UPDATE_FUNC(fs_canon_saturation_update) {
-  int s = picstyle_get_current_saturation();
-  if (s >= -4 && s <= 4) {
-    MENU_SET_VALUE("%+d", s);
-    MENU_SET_ICON(MNI_PERCENT, (s + 4) * 100 / 8);
-  } else {
-    MENU_SET_VALUE("N/A");
-  }
-}
 
-static void fs_canon_colortone_toggle(void *priv, int delta) {
-  int t = picstyle_get_current_color_tone();
-  if (t < -4 || t > 4)
-    t = 0;
-  t = fs_clamp_i(t + delta, -4, 4);
-  picstyle_set_current_color_tone(t);
-}
 
-static MENU_UPDATE_FUNC(fs_canon_colortone_update) {
-  int t = picstyle_get_current_color_tone();
-  if (t >= -4 && t <= 4) {
-    MENU_SET_VALUE("%+d", t);
-    MENU_SET_ICON(MNI_PERCENT, (t + 4) * 100 / 8);
-  } else {
-    MENU_SET_VALUE("N/A");
-  }
-}
 
-static MENU_UPDATE_FUNC(fs_pipeline_info_update) {
-  MENU_SET_VALUE("LiveView Only");
-  MENU_SET_HELP(
-      "Display filter runs in LiveView. RAW (CR2) and JPEG are NOT modified.");
-  MENU_SET_WARNING(
-      MENU_WARN_INFO,
-      "Use tools/filmsim_lut.py to export matching .cube for post.");
-}
 
-static MENU_UPDATE_FUNC(fs_ps_probe_update) {
-  MENU_SET_VALUE("flavor %d/%d/%d", (int)picstyle_flavor_len[0],
-                 (int)picstyle_flavor_len[2], (int)picstyle_flavor_len[4]);
-  MENU_SET_HELP(
-      "Size of the picture style flavor blocks pushed by the camera.");
-  MENU_SET_WARNING(MENU_WARN_INFO, "SET: write ML/LOGS/PSTYLE.TXT");
-}
 
-static MENU_SELECT_FUNC(fs_user1_toggle) {
-  menu_numeric_toggle(&film_sim_user1, delta, 0, 1);
-  fs_user1_last_preset = -1;
-  if (film_sim_user1) {
-    fs_user1_dirty = 1;
-    fs_signature_valid = 0; /* forces fs_sync -> inject */
-  }
-}
 
-static MENU_UPDATE_FUNC(fs_user1_update) {
-  MENU_SET_VALUE("%s", film_sim_user1 ? "On" : "Off");
-  MENU_SET_ICON(film_sim_user1 ? MNI_ON : MNI_OFF, 0);
-  if (film_sim_user1 && !fs_slot1_ready()) {
-    MENU_SET_WARNING(
-        MENU_WARN_NOT_WORKING,
-        "No ML/LOGS/SLOT1.BIN yet; it is written on the next boot.");
-  } else if (film_sim_user1 && fs_stat_inject_rc == -5) {
-    MENU_SET_WARNING(
-        MENU_WARN_NOT_WORKING,
-        "Prop write 0x04010001 timed out (rc=-5); see ML/LOGS/FILMSIM.LOG.");
-  } else if (film_sim_user1) {
-    MENU_SET_WARNING(MENU_WARN_INFO,
-                     "Clones %s body + preset sliders into User 1.",
-                     fs_stat_slot1_src);
-  }
-}
 
-static MENU_UPDATE_FUNC(fs_render_test_update) {
-  int p = fs_clamp_i(film_sim_preset, 0, FS_PRESET_COUNT - 1);
-  MENU_SET_VALUE("%s", fs_preset_names[p]);
-  MENU_SET_HELP("Renders one 720x480 frame through the real filter code and "
-                "saves before/after BMPs.");
-  MENU_SET_WARNING(MENU_WARN_INFO,
-                   "SET: write ML/FILMSIM/Rhhmmss/ (BMPs + REPORT.TXT).");
-}
 
-static MENU_SELECT_FUNC(fs_render_test_select) { fs_force_render_test = 1; }
 
 static void fs_ps_write_dump(void) {
   FILE *f = FIO_CreateFile("ML/LOGS/PSTYLE.TXT");
@@ -1642,7 +1596,6 @@ static void fs_ps_write_dump(void) {
   NotifyBox(2000, "PSTYLE.TXT written");
 }
 
-static MENU_SELECT_FUNC(fs_ps_probe_dump) { fs_force_ps_dump = 1; }
 
 /*
  * Picture style slot backup and cloning.
@@ -1970,7 +1923,7 @@ static void fs_slot_backup_task(void *unused) {
 
     if (fs_user1_dirty) {
       fs_user1_dirty = 0;
-      if (film_sim_user1 && film_sim_neutralcap) {
+      if (film_sim_user1 && fs_grade_in_shutter()) {
         /*
          * Neutral capture means Canon contributes no look, so the engine's LUT
          * is the only thing grading the frame.  Injecting a PF2 blob here
@@ -2011,19 +1964,9 @@ static void fs_slot_backup_task(void *unused) {
            * any stock change, so a stock capture style got the engine's look
            * applied on top of it -- measured on IMG_9973_F.JPG, sat 63.2
            * against the camera JPEG's 29.6. */
-          fs_yuvhook_grade(film_sim_neutralcap ? film_sim_yuvrows : 0);
+          fs_yuvhook_grade(fs_grade_in_shutter() ? film_sim_yuvrows : 0);
         }
       }
-    }
-
-    if (fs_force_ps_dump) {
-      fs_force_ps_dump = 0;
-      fs_ps_write_dump();
-    }
-
-    if (fs_force_render_test) {
-      fs_force_render_test = 0;
-      fs_run_render_test(film_sim_preset, film_sim_strength, film_sim_grain);
     }
 
     if (fs_force_dump_log) {
@@ -2039,25 +1982,9 @@ static void fs_slot_backup_task(void *unused) {
   }
 }
 
-static MENU_UPDATE_FUNC(fs_debug_log_update) {
-  MENU_SET_VALUE("%d fr (%dms)%s", (int)fs_stat_frames, fs_stat_last_ms,
-                 film_sim_dbglog ? " [DBG]" : "");
-  MENU_SET_ICON(fs_stat_frames > 0 ? MNI_ON : MNI_OFF, 0);
-  MENU_SET_HELP(
-      "Live filter telemetry: %d frames, last %dms (max %dms), slot1=%s.",
-      (int)fs_stat_frames, fs_stat_last_ms, fs_stat_max_ms, fs_stat_slot1_src);
-  MENU_SET_WARNING(
-      MENU_WARN_INFO,
-      "SET: dump snapshot to FILMSIM.LOG | Q: periodic frame log (%s)",
-      film_sim_dbglog ? "ON" : "OFF");
-}
 
 static MENU_SELECT_FUNC(fs_debug_log_select) { fs_force_dump_log = 1; }
 
-static MENU_SELECT_FUNC(fs_debug_log_toggle_q) {
-  film_sim_dbglog = !film_sim_dbglog;
-  fs_log("dbglog periodic frame logging set to %d", film_sim_dbglog);
-}
 
 /* Flag-driven run, so the probe does not depend on menu navigation. */
 static void fs_ps_probe_task(void *unused) {
@@ -2219,28 +2146,6 @@ static struct menu_entry film_sim_lv_menu[] = {
  * background task applied it at its next tick.
  */
 
-/* The CR2's embedded JPEG is rendered through the active picture style, and
- * Develop decodes that same JPEG. If the style already applies the film look,
- * the .fs applies it a second time -- measured 20.8/255 for Velvia and
- * 23.5/255 for CineStill 800T on real captures. Neutral leaves base, sliders,
- * Kelvin and WB shift at Canon defaults so the recipe is the only grading. */
-static CONFIG_INT("film.sim.capture", film_sim_capture, 0);
-
-/*
- * How much of the pipeline the develop uses.
- *
- *   1  picture style only: the look is written into the style slots and the
- *      camera bakes it into the JPEG it shoots. Nothing to develop, no cost.
- *   2  style + our grade: the style does the base colour, the engine adds
- *      curves, hue axes, split tone, halation and grain on the preview JPEG.
- *   3  raw develop: the sensor data is decoded and graded from scratch -- no
- *      picture style involved at all. Both payloads this body writes are
- *      handled: a mosaic frame, and the mRAW the 6D actually stores.
- */
-#define FS_LEVEL_STYLE 1
-#define FS_LEVEL_GRADE 2
-#define FS_LEVEL_RAW 3
-static CONFIG_INT("film.sim.level", film_sim_level, FS_LEVEL_GRADE);
 /* Off by default: ON fires a 30 s develop on every shot and on every
  * switch to level 2/3, which should be a deliberate choice. */
 static CONFIG_INT("film.sim.auto", film_sim_auto, 0);
@@ -2341,8 +2246,7 @@ static uint32_t fs_set_prop_of(int slot) {
  */
 static int fs_force_capture_style(void)
 {
-  int want = (film_sim_capture && film_sim_level != FS_LEVEL_STYLE &&
-              film_sim_neutralcap) ? 0x84 : 0x21;
+  int want = fs_grade_in_shutter() ? 0x84 : 0x21;
   if ((int)lens_info.raw_picstyle == want) {
     fs_log("capset: already on picture style 0x%02x (%s)", want,
            want == 0x84 ? "Neutral" : "UserDef1");
@@ -2381,8 +2285,7 @@ static int fs_apply_film_now(void) {
    * films in a row writing byte-identical sliders and only the style name
    * changed. So the override must not apply at level 1.
    */
-  int neutral_style = film_sim_capture && film_sim_level != FS_LEVEL_STYLE &&
-                     film_sim_neutralcap;
+  int neutral_style = fs_grade_in_shutter();
   if (neutral_style) {
     st.base = 0x84; /* Neutral */
     st.contrast = 0;
@@ -2491,16 +2394,7 @@ static MENU_UPDATE_FUNC(fs_film_update) {
       st.kelvin, st.wbs_ba, st.wbs_gm);
 }
 
-static MENU_SELECT_FUNC(fs_dev_next) {
-  film_sim_dev = (film_sim_dev + 1) % FS_DEV_COUNT;
-  fs_apply_film_now();
-}
 
-static MENU_UPDATE_FUNC(fs_dev_update) {
-  static const char *dev_names[FS_DEV_COUNT] = {
-      "Standard", "Push +1 (+1 EV)", "Push +2 (+2 EV)", "Pull -1 (-1 EV)"};
-  MENU_SET_VALUE("%s", dev_names[film_sim_dev % FS_DEV_COUNT]);
-}
 
 /* ---------------------------------------------------------------- darkroom
  *
@@ -2742,49 +2636,11 @@ static void fs_scan_dcim_photos(void) {
 static const char *fs_stock_alias(const film_xml_t *f);
 
 /* A recipe this module wrote itself, rather than one that shipped with it. */
-static int fs_recipe_is_generated(const char *path) {
-  char head[32];
-  FILE *fp = FIO_OpenFile(path, O_RDONLY);
-  if (!fp)
-    return 0;
-  int n = FIO_ReadFile(fp, head, sizeof head - 1);
-  FIO_CloseFile(fp);
-  if (n <= 0)
-    return 0;
-  head[n] = '\0';
-  return !strncmp(head, "# Soup Engine Stock Recipe", 26);
-}
+/* First line of a recipe this module generated, as opposed to one written by
+ * hand -- a hand-written recipe starts with its own comment. Two call sites
+ * used to compare 25 and 26 bytes of this string against each other. */
+#define FS_RECIPE_MARKER "# Soup Engine Stock Recipe"
 
-/*
- * Which recipe the develop will actually load for this stock.
- *
- * The shelf and the darkroom both used to print a "Built-in Tetrahedral" LUT
- * path. The camera path applies no 3D LUT at all; the look comes from the .fs,
- * and where none exists a short one is generated from the XML -- a single
- * global curve, no per-channel RGB, no hue matrix, no split tone, no halation.
- * Showing which of the two it is stops the UI advertising a grade it cannot do.
- */
-static void fs_recipe_label(const film_xml_t *f, char *buf, size_t cap) {
-  static const char *const dirs[] = {"ML/FILM", "ML/FILMS"};
-  const char *stems[2] = {fs_stock_alias(f), f->code};
-  char path[64];
-
-  for (int i = 0; i < 2; i++) {
-    if (!stems[i])
-      continue;
-    for (int d = 0; d < 2; d++) {
-      uint32_t sz = 0;
-      snprintf(path, sizeof path, "%s/%s.fs", dirs[d], stems[i]);
-      if (FIO_GetFileSize(path, &sz) != 0 || sz == 0)
-        continue;
-      if (fs_recipe_is_generated(path))
-        break;
-      snprintf(buf, cap, "%s.fs", stems[i]);
-      return;
-    }
-  }
-  snprintf(buf, cap, "generated (%s)", f->code);
-}
 
 /* The shelf screen. All drawing lives in gui/fsg.c so the same pixels can be
  * rendered on a desktop; this only feeds it the current state. */
@@ -4015,7 +3871,8 @@ static int fs_resolve_stock_path(const film_xml_t *f, char *out_path,
       FIO_CloseFile(fp);
     if (n > 0)
       head[n] = 0;
-    int stale = (n > 0 && !strncmp(head, "# Soup Engine Stock Recipe", 25) &&
+    int stale = (n > 0 && !strncmp(head, FS_RECIPE_MARKER,
+                                   sizeof FS_RECIPE_MARKER - 1) &&
                  !strstr(head, "AUTOGEN"));
     if (!stale) {
       snprintf(out_path, out_len, "%s", path);
@@ -5931,9 +5788,6 @@ static MENU_SELECT_FUNC(fs_reload_xml_action) {
   NotifyBox(2000, "Loaded %d XML Films from %s", count, FILM_DIR);
 }
 
-static MENU_UPDATE_FUNC(fs_reload_xml_update) {
-  MENU_SET_VALUE("%d Loaded", film_active_count);
-}
 
 /* ---------------------------------------------------------------- liveview
  * info
@@ -6412,8 +6266,8 @@ static void fs_lv_monitor_task(void *unused) {
                    : lens_info.raw_picstyle == 0x22 ? "User Def 2"
                    : lens_info.raw_picstyle == 0x23 ? "User Def 3"
                    : "other",
-                 film_sim_neutralcap ? "is the only look expected in the JPEG"
-                                     : "adds to the stock written into the style");
+                 fs_grade_in_shutter() ? "is the only look expected in the JPEG"
+                                       : "adds to the stock written into the style");
           fs_log("yuvsites: pq=%08x (size lo=%d hi=%d) | jpeg r0=%08x r1=%08x diag %d "
                  "| ssraw r0=%08x r1=%08x diag %d",
                  (unsigned)fs_yuvhook_pic_quality(),
@@ -6648,10 +6502,10 @@ static unsigned int film_sim_init() {
          * JPEG -- that comparison is what says whether we are looking at the
          * frame Canon encodes.
          */
-        fs_yuvhook_grade(film_sim_neutralcap ? film_sim_yuvrows : 0);
+        fs_yuvhook_grade(fs_grade_in_shutter() ? film_sim_yuvrows : 0);
         fs_log("yuvgrade: in-shutter grade %s (capture style %s)",
-               film_sim_neutralcap ? "ON" : "off",
-               film_sim_neutralcap ? "Neutral" : "stock");
+               fs_grade_in_shutter() ? "ON" : "off",
+               fs_grade_in_shutter() ? "Neutral" : "stock");
       }
     }
   }
@@ -6689,7 +6543,6 @@ static unsigned int film_sim_init() {
       task_create("fs_ps", 0x1e, 0x2000, fs_ps_probe_task, 0);
     }
   }
-
 
   /* film.sim.auto: watch for new frames and for level 2/3 being picked */
   if (film_sim_auto)

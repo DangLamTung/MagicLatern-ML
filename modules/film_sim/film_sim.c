@@ -138,6 +138,11 @@ static CONFIG_INT("film.sim.yuvrows", film_sim_yuvrows, 3648);
  */
 static CONFIG_INT("film.sim.neutralcap", film_sim_neutralcap, 0);
 
+/* Sharpness written into the forced-Neutral base, 0..7 on Canon's scale, where
+ * 3 is what the Standard style uses. Only applies while the capture style is
+ * Neutral (see fs_grade_in_shutter); at 0 the file is as soft as the sensor. */
+static CONFIG_INT("film.sim.sharp", film_sim_sharp, 3);
+
 /* The CR2's embedded JPEG is rendered through the active picture style, and
  * Develop decodes that same JPEG. If the style already applies the film look,
  * the .fs applies it a second time -- measured 20.8/255 for Velvia and
@@ -1056,39 +1061,43 @@ static void FAST fs_process_frame(void *src, void *dst) {
      * comment above asks for. The buffer itself shrinks from 691 KB of the
      * temporary pool to 23 KB.
      */
-    const int band_rows = 16;
-    size_t band = (size_t)pitch * (size_t)band_rows;
+    /*
+     * One copy for the whole frame, then one grade.
+     *
+     * This was banded (copy 16 rows, grade 16 rows) to keep the grade reading
+     * cache-hot data. The camera says it bought nothing: grade stayed at 89 ms
+     * of a 101 ms pass either way, because the cost is arithmetic, not memory.
+     * What banding did add was a risk: each band is copied at a different
+     * moment while Canon rewrites the plane every 33 ms, so bands can come from
+     * different sensor frames and show as seams every 16 rows. A single 11 ms
+     * copy cannot do that.
+     */
+    size_t total = (size_t)pitch * (size_t)height;
 
     if (!fs_snap && !fs_snap_failed) {
-      fs_snap = tmp_malloc(band);
-      fs_snap_size = fs_snap ? band : 0;
+      fs_snap = tmp_malloc(total);
+      fs_snap_size = fs_snap ? total : 0;
       if (!fs_snap) {
         fs_snap_failed = 1;
-        fs_log("lv: no memory for the %d byte band copy; grading Canon's "
+        fs_log("lv: no memory for the %d byte frame copy; grading Canon's "
                "buffer directly (can read a half-written frame)",
-               (int)band);
+               (int)total);
         fs_log_flush();
       }
-    } else if (fs_snap && fs_snap_size < band) {
+    } else if (fs_snap && fs_snap_size < total) {
       /* the panel geometry changed under us (movie mode, HDMI) */
       free(fs_snap);
-      fs_snap = tmp_malloc(band);
-      fs_snap_size = fs_snap ? band : 0;
+      fs_snap = tmp_malloc(total);
+      fs_snap_size = fs_snap ? total : 0;
     }
 
-    if (fs_snap && fs_snap_size >= band) {
-      for (int y = row0; y < row1; y += band_rows) {
-        int n = (row1 - y < band_rows) ? row1 - y : band_rows;
-        uint32_t tc = get_ms_clock();
-        memcpy(fs_snap, (const char *)src + (size_t)y * pitch,
-               (size_t)n * pitch);
-        copy_ms += get_ms_clock() - tc;
-        tc = get_ms_clock();
-        fs_core_process_rows(&fs_lut, fs_snap,
-                             (char *)dst + (size_t)y * pitch, pitch, 0, n,
-                             &fs_rnd);
-        grade_ms += get_ms_clock() - tc;
-      }
+    if (fs_snap && fs_snap_size >= total) {
+      uint32_t tc = get_ms_clock();
+      memcpy(fs_snap, src, total);
+      copy_ms += get_ms_clock() - tc;
+      tc = get_ms_clock();
+      fs_core_process_rows(&fs_lut, fs_snap, dst, pitch, row0, row1, &fs_rnd);
+      grade_ms += get_ms_clock() - tc;
       if (row0 > 0)
         memcpy(dst, src, (size_t)row0 * pitch);
       if (row1 < height)
@@ -2249,7 +2258,12 @@ static int fs_apply_film_now(void) {
   if (neutral_style) {
     st.base = 0x84; /* Neutral */
     st.contrast = 0;
-    st.sharpness = 1;
+    /* Neutral's own sharpness is the minimum, so a Neutral capture is the one
+     * JPEG this camera writes with no sharpening at all -- measured at half the
+     * detail energy of a develop of the same frame (mean |laplacian| 2.91
+     * against 6.44). The look is the engine's, but the sharpening is Canon's,
+     * and it is a per-style setting, not part of the look. */
+    st.sharpness = fs_clamp_i(film_sim_sharp, 0, 7);
     st.saturation = 0;
     st.tone = 0;
     st.kelvin = 0; /* leave the camera's WB alone */
@@ -6595,6 +6609,7 @@ MODULE_CONFIG(film_sim_dbglog)
 MODULE_CONFIG(film_sim_art)
 MODULE_CONFIG(film_sim_shotgrade)
 MODULE_CONFIG(film_sim_neutralcap)
+MODULE_CONFIG(film_sim_sharp)
 MODULE_CONFIG(film_sim_direct)
 MODULE_CONFIG(film_sim_calib)
 MODULE_CONFIG(film_sim_stock)

@@ -37,7 +37,8 @@ int main(int argc, char **argv)
     se_err e;
 
     if (argc < 4) {
-        fprintf(stderr, "usage: %s file.CR2 stock.fs out.jpg\n", argv[0]);
+        fprintf(stderr, "usage: %s file.CR2 stock.fs out.jpg [aspect] [pad] "
+                        "[strength] [satboost] [lut.bin]\n", argv[0]);
         return 2;
     }
 
@@ -56,6 +57,10 @@ int main(int argc, char **argv)
     /* optional 7th: saturation boost, 100 = the stock's own SAT */
     if (argc > 7)
         se_cam_set_satboost(atoi(argv[7]));
+
+    /* optional 8th: a packed cube (tools/cube2bin.py) to apply before the look */
+    if (argc > 8)
+        se_cam_lut_path(argv[8]);
 
     e = se_cam_develop(argv[1], argv[2], argv[3], progress, note, NULL);
     printf("develop: %s\n", se_strerror(e));

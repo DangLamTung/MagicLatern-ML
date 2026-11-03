@@ -299,3 +299,37 @@ void se_lut3_apply_row(const se_lut3 *lut, uint16_t *rgb, int width)
         }
     }
 }
+
+/* ------------------------------------------------------- packed cubes */
+size_t se_lut3_bin_bytes(int size)
+{
+    if (size < 2 || size > SE_LUT3_MAX_SIZE) return 0;
+    return 8u + (size_t)size * size * size * 3u * 2u;
+}
+
+se_err se_lut3_load_bin(const void *buf, size_t len, se_lut3 *lut, se_arena *a)
+{
+    const unsigned char *p = (const unsigned char *)buf;
+    int    size, i;
+    size_t n, need;
+
+    if (!buf || len < 8 + 6) return SE_E_UNSUPPORTED;
+    if (p[0] != 'F' || p[1] != 'L' || p[2] != 'U' || p[3] != 'T')
+        return SE_E_UNSUPPORTED;
+    size = (int)(p[4] | (p[5] << 8));
+    need = se_lut3_bin_bytes(size);
+    /* exact: a short file is a truncated copy, and a long one is not a cube */
+    if (!need || len != need) return SE_E_UNSUPPORTED;
+
+    lut->size = size;
+    n = (size_t)size * size * size * 3u;
+    lut->data = SE_NEW(a, uint16_t, n);
+    if (!lut->data) return SE_E_NOMEM;
+
+    p += 8;
+    for (i = 0; i < (int)n; i++) {
+        lut->data[i] = (uint16_t)(p[0] | (p[1] << 8));
+        p += 2;
+    }
+    return SE_OK;
+}

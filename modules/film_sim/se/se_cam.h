@@ -29,6 +29,9 @@ void se_cam_set_pad32(int on);
 
 /* How much of the stock to apply to a developed file, 0..100 (100 = as written). */
 void se_cam_set_strength(int s);
+/* Packed 3D cube (tools/cube2bin.py) applied to the decoded rows before the
+ * look; NULL or "" turns it off. Loaded lazily on first use, once. */
+void se_cam_lut_path(const char *p);
 
 /* Saturation on top of the stock's own, 100 = as written, 200 = double. */
 void se_cam_set_satboost(int s);

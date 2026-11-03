@@ -65,6 +65,16 @@ static CONFIG_INT("film.sim.strength", film_sim_strength, 100);
  * recipes at once. */
 static CONFIG_INT("film.sim.satboost", film_sim_satboost, 100);
 static CONFIG_INT("film.sim.grain", film_sim_grain, 8);
+/*
+ * Apply an external 3D cube while developing.
+ *
+ * The file is ML/FILMSIM/LOOK.BIN, made from a .cube by tools/cube2bin.py: the
+ * camera cannot hold a .cube's 786 KB of text, and 17^3 is 29 KB. It is applied
+ * to the decoded rows just before the film look, which is the sRGB input those
+ * cubes are exported for. With this on, set Strength to 0 if the cube is meant
+ * to BE the look rather than sit under it.
+ */
+static CONFIG_INT("film.sim.lut", film_sim_lut, 0);
 static CONFIG_INT("film.sim.fps", film_sim_fps, 30);
 static CONFIG_INT("film.sim.user1", film_sim_user1,
                   1); /* inject into User 1 + select it */
@@ -947,6 +957,9 @@ static void fs_sync() {
   }
   /* Framing is an aspect mode: the hook needs it even when nothing else moved. */
   fs_yuvhook_bars(film_sim_aspect);
+  /* An external cube is read once, at the first develop; turning it off must
+   * release it and turning it on must pick up a file that changed. */
+  se_cam_lut_path(film_sim_lut ? "ML/FILMSIM/LOOK.BIN" : NULL);
 }
 
 /*
@@ -2151,6 +2164,7 @@ static CONFIG_INT("film.sim.replace", film_sim_replace, 1);
  * the in-shutter path if it ran, the develop if it did not.
  */
 static CONFIG_INT("film.sim.shotgrade", film_sim_shotgrade, 0);
+
 
 /*
  * Write a JPEG from the frame the camera built, after grading it in place.
@@ -5971,6 +5985,14 @@ static struct menu_entry fs_menu_develop[] = {
         .help = "Develop every photo ticked with Mark, one after another.",
     },
     {
+        .name = "External LUT",
+        .priv = &film_sim_lut,
+        .max = 1,
+        .help = "Apply ML/FILMSIM/LOOK.BIN while developing. Make that file "
+                "from a .cube with tools/cube2bin.py. Set Strength to 0 to "
+                "develop with the cube alone.",
+    },
+    {
         .name = "Replace Camera JPEG",
         .priv = &film_sim_replace,
         .max = 1,
@@ -6610,6 +6632,7 @@ MODULE_CONFIG(film_sim_user1)
 MODULE_CONFIG(film_sim_dbglog)
 MODULE_CONFIG(film_sim_art)
 MODULE_CONFIG(film_sim_shotgrade)
+MODULE_CONFIG(film_sim_lut)
 MODULE_CONFIG(film_sim_neutralcap)
 MODULE_CONFIG(film_sim_sharp)
 MODULE_CONFIG(film_sim_direct)

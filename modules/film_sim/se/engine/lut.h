@@ -66,4 +66,17 @@ se_err se_lut3_parse_cube(const char *text, size_t len, se_lut3 *lut, se_arena *
 /* Tetrahedral interpolation, applied in place to an interleaved RGB16 row. */
 void se_lut3_apply_row(const se_lut3 *lut, uint16_t *rgb, int width);
 
+/*
+ * The packed form, for a camera that cannot hold a .cube's text.
+ *
+ * A .cube is ASCII and 786 KB at 32^3; the same cube packed as RGB16 is 216 KB,
+ * and sampled down to 17^3 it is 29 KB, which fits beside the develop's other
+ * buffers. tools/cube2bin.py writes it, the camera only reads it.
+ *
+ *   "FLUT"  u16 size  u16 reserved  then size^3 * 3 little-endian u16,
+ *   red index varying fastest, same order as .cube and as se_lut3.data.
+ */
+size_t se_lut3_bin_bytes(int size);            /* total file size, 0 if invalid */
+se_err se_lut3_load_bin(const void *buf, size_t len, se_lut3 *lut, se_arena *a);
+
 #endif /* SE_LUT_H */

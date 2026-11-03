@@ -18,6 +18,7 @@
 #include "engine/se_libc.h"
 #include "engine/cr2.h"
 #include "engine/look.h"
+#include "engine/lut.h"
 #include "engine/stock.h"
 #include "engine/jpeg_dec.h"
 #include "engine/jpeg_enc.h"
@@ -154,6 +155,9 @@ static struct thumbws thumb_ws;
  */
 #define SE_READ_CHUNK 8192
 static int      se_read(FILE *f, void *dst, size_t want);
+
+void se_cam_lut_path(const char *p);
+static const se_lut3 *lut_get(void);
 static uint32_t se_now_ms(void);
 static uint32_t t_io;                  /* time spent waiting for the card */
 
@@ -381,6 +385,11 @@ void se_cam_set_pad32(int on) { se_pad_32 = on ? 1 : 0; }
 /* Strength of the look, 0..100. The menu has offered this slider all along and
  * only the LiveView path honoured it; a developed file was always 100%. */
 static int se_strength = 100;
+
+/* Widest row the cube is applied to in one go. The develop's own output width,
+ * and a static buffer rather than 32 KB of a task's stack. */
+#define SE_LUT_ROW_MAX 5472
+static uint16_t lut_rowbuf[SE_LUT_ROW_MAX * 3];
 void se_cam_set_strength(int s) { se_strength = (s < 0) ? 0 : (s > 100 ? 100 : s); }
 
 /*
@@ -749,16 +758,129 @@ static int look_emit(void *ctx, const unsigned char *row, int width)
     return 0;
 }
 
+/*
+ * Apply the external cube to rows the decoder has just produced.
+ *
+ * The rows are sRGB-encoded 8-bit, which is exactly the domain a .cube exported
+ * from Lightroom or Resolve expects, so the only conversion is 8 -> 16 bit and
+ * back. Done here rather than in the look because the cube models the camera
+ * profile the look is meant to sit on top of, not the other way round.
+ */
+static int lut_apply_rows(const uint8_t *rgb, int nrows, int width)
+{
+    const se_lut3 *cube = lut_get();
+    uint16_t *buf = lut_rowbuf;
+    int r, x;
+
+    if (!cube) return 0;
+    if (width > SE_LUT_ROW_MAX) return -1;
+
+    for (r = 0; r < nrows; r++) {
+        const uint8_t *in = rgb + (size_t)r * width * 3u;
+        uint8_t *out = (uint8_t *)in;   /* in place: the decoder's buffer is ours */
+        for (x = 0; x < width * 3; x++)
+            buf[x] = (uint16_t)(in[x] * 257u);   /* 0..255 -> 0..65535 exactly */
+        se_lut3_apply_row(cube, buf, width);
+        for (x = 0; x < width * 3; x++)
+            out[x] = (uint8_t)((buf[x] + 128u) / 257u);
+    }
+    return 0;
+}
+
 static int decode_rows(void *ctx, const unsigned char *rgb, int nrows, int width)
 {
     struct dev *d = (struct dev *)ctx;
     (void)width;
     {
         uint32_t lk0 = se_now_ms();
-        int rc = se_look_rows(d->run, rgb, nrows, look_emit, d) == SE_OK ? 0 : -1;
+        int rc;
+        if (lut_apply_rows(rgb, nrows, width) != 0) return -1;
+        rc = se_look_rows(d->run, rgb, nrows, look_emit, d) == SE_OK ? 0 : -1;
         t_look += se_now_ms() - lk0;
         return rc;
     }
+}
+
+/*
+ * An external 3D LUT for the develop path.
+ *
+ * A .cube is ASCII and 786 KB at 32^3, which this camera cannot hold; the packed
+ * form written by tools/cube2bin.py is 29 KB at 17^3 and 216 KB at 33^3. The
+ * file is read straight into the buffer se_lut3_apply_row() indexes, so there is
+ * one allocation and no second copy. Peak memory is the cube alone.
+ *
+ * Applied to the decoded rows before the look, in both develop paths, so a
+ * camera-profile cube sees the sRGB input it was made for.
+ */
+static char     lut_path[64];
+static se_lut3  lut_cube;
+static void    *lut_hold;      /* owns lut_cube.data */
+static int      lut_state;     /* 0 untried, 1 ready, -1 failed */
+
+void se_cam_lut_path(const char *p)
+{
+    snprintf(lut_path, sizeof lut_path, "%s", p ? p : "");
+    if (lut_hold) { free(lut_hold); lut_hold = NULL; }
+    memset(&lut_cube, 0, sizeof lut_cube);
+    lut_state = 0;
+}
+
+static const se_lut3 *lut_get(void)
+{
+    unsigned char h[8];
+    uint32_t size, need;
+    FILE *f;
+    int n;
+
+    if (lut_state) return lut_state > 0 ? &lut_cube : NULL;
+    if (!lut_path[0]) { lut_state = -1; return NULL; }
+
+    f = FIO_OpenFile(lut_path, O_RDONLY);
+    if (!f) {
+        se_log("lut: %s not on the card, developing without it", lut_path);
+        lut_state = -1;
+        return NULL;
+    }
+    if ((n = se_read(f, h, sizeof h)) != (int)sizeof h ||
+        h[0] != 'F' || h[1] != 'L' || h[2] != 'U' || h[3] != 'T') {
+        FIO_CloseFile(f);
+        se_log("lut: %s is not an FLUT cube, developing without it", lut_path);
+        lut_state = -1;
+        return NULL;
+    }
+    size = (uint32_t)(h[4] | (h[5] << 8));
+    need = (uint32_t)se_lut3_bin_bytes((int)size);
+    if (!need || need != 8u + size * size * size * 6u) {
+        FIO_CloseFile(f);
+        se_log("lut: %s declares size %d, unusable", lut_path, (int)size);
+        lut_state = -1;
+        return NULL;
+    }
+    lut_hold = malloc(need - 8u);
+    if (!lut_hold) {
+        FIO_CloseFile(f);
+        se_log("lut: no memory for a %d byte cube, developing without it",
+               (int)(need - 8u));
+        lut_state = -1;
+        return NULL;
+    }
+    /* little-endian u16 triples, which is the layout se_lut3.data already has
+     * on this body; the header is skipped rather than parsed again. */
+    if (se_read(f, lut_hold, (int)(need - 8u)) != (int)(need - 8u)) {
+        FIO_CloseFile(f);
+        free(lut_hold); lut_hold = NULL;
+        se_log("lut: %s is truncated, developing without it", lut_path);
+        lut_state = -1;
+        return NULL;
+    }
+    FIO_CloseFile(f);
+
+    lut_cube.size = (int)size;
+    lut_cube.data = (uint16_t *)lut_hold;
+    lut_state = 1;
+    se_log("lut: %s loaded, %d^3 (%d bytes)", lut_path, (int)size,
+           (int)(need - 8u));
+    return &lut_cube;
 }
 
 static void engine_log(void *ctx, const char *msg)

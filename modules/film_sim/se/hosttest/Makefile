@@ -42,6 +42,11 @@ tabledump: tabledump.c $(SE_DIR)/se_libgcc.c $(SE_DIR)/../fs_yuvlook.c $(ENG_SRC
 lvgrade: lvgrade.c $(SE_DIR)/se_libgcc.c $(SE_DIR)/../fs_yuvlook.c $(ENG_SRC) stubs.c
 	$(CC) $(CFLAGS) $(CPPFLAGS) -o $@ $^ $(LDLIBS)
 
+# tableerr: how far the shot-time tables fall from the full grade, by luma
+# and by chroma. Answers "what does the separable form lose" with numbers.
+tableerr: tableerr.c $(SE_DIR)/se_libgcc.c $(SE_DIR)/../fs_yuvlook.c $(ENG_SRC) stubs.c
+	$(CC) $(CFLAGS) $(CPPFLAGS) -o $@ $^ $(LDLIBS)
+
 grade_jpeg: grade_jpeg.c $(SE_DIR)/se_cam.c $(SE_DIR)/se_libgcc.c $(ENG_SRC) stubs.c
 	$(CC) $(CFLAGS) $(CPPFLAGS) -o $@ $^ $(LDLIBS)
 
@@ -72,7 +77,7 @@ match: lookmatch
 	./lookmatch "$(CR2)" "$(STOCK)"
 
 clean:
-	rm -f $(BIN) lookmatch rawdev grade_jpeg lvgrade
+	rm -f $(BIN) lookmatch rawdev grade_jpeg lvgrade tabledump tableerr
 
 .PHONY: all check match clean
 

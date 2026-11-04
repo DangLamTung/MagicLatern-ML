@@ -3522,6 +3522,31 @@ static void fs_screen_take(void) {
       UILOCK_SHUTTER); /* the shutter cannot fire under a module screen */
   bmp_on();
   msleep(30);
+  /*
+   * Stop Canon repainting the overlay when we stay on the LiveView screen.
+   *
+   * This module's own notes name the call -- "canon_gui_disable_front_buffer()
+   * is the call that stops it; menu.c uses the same one when it opens" -- and
+   * then never made it. So with LiveView running, Canon's GUI task kept
+   * repainting the bitmap buffer: our frame survived about one refresh and was
+   * then wiped, and because the shelf redraws on a clock the panel strobed --
+   * the LiveView "attacking" the screen.
+   *
+   * The other path (LiveView off) switches to play mode instead, where the OSD
+   * is composited over the picture buffer and a write persists; disabling the
+   * front buffer there is what once produced "flash then nothing", so it is
+   * done only on the path that does not take it.
+   *
+   * menu.c's open sequence is the reference: piggyback_canon_menu();
+   * canon_gui_disable_front_buffer(); redraw. The close sequence is already
+   * mirrored in fs_screen_release(): canon_gui_enable_front_buffer(1).
+   */
+  if (!fs_took_play) {
+    canon_gui_disable_front_buffer();
+    fs_log("screen: Canon's overlay repaint stopped (disabled=%d, lv=%d)",
+           canon_gui_front_buffer_disabled(), lv ? 1 : 0);
+    fs_log_flush();
+  }
   clrscr();
   /*
    * Palette calibration strip.

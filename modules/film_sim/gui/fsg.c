@@ -520,7 +520,7 @@ void fsg_draw_shelf(const fsg_shelf_t *s)
            s->hint_r ? s->hint_r : "MENU = exit");
 }
 
-/* ---- darkroom ---------------------------------------------------------- */
+/* ---- the two bands that move on their own ------------------------------ */
 
 void fsg_draw_shelf_header(const fsg_shelf_t *s)
 {
@@ -532,6 +532,8 @@ void fsg_draw_shelf_strip(const fsg_shelf_t *s)
 {
   film_strip(s);
 }
+
+/* ---- darkroom ---------------------------------------------------------- */
 
 void fsg_draw_develop(const fsg_dev_t *d)
 {

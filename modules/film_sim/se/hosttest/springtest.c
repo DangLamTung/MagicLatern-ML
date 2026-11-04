@@ -20,7 +20,7 @@
 
 static void run(float shelves, int dt_ms)
 {
-    fs_spring_t s = {0, 0};
+    fs_spring_t s = {0, 0, 0};
     int target = (int)(shelves * 65536.0f + 0.5f);
     int prev = 0, worst = 0, frames = 0;
     int old_worst = 0, old_frames = 0;

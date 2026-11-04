@@ -34,8 +34,9 @@
 #define FS_SPRING_H_INCLUDED
 
 typedef struct {
-  int x; /* position, 2^16 per frame */
-  int v; /* velocity, 2^16 frames per second */
+  int x;   /* position, 2^16 per frame            */
+  int v;   /* velocity, 2^16 frames per second    */
+  int rem; /* milliseconds carried over to the next call */
 } fs_spring_t;
 
 #define FS_SPRING_K1 91278
@@ -47,8 +48,6 @@ typedef struct {
 /* Step towards `target` by `dt_ms`. Returns 1 while still moving. */
 static inline int fs_spring_step(fs_spring_t *s, int target, int dt_ms)
 {
-  int left;
-
   if (!s)
     return 0;
   /* A stalled frame (a develop, a card write) must not become a huge step. */
@@ -57,7 +56,18 @@ static inline int fs_spring_step(fs_spring_t *s, int target, int dt_ms)
   if (dt_ms < 0)
     dt_ms = 0;
 
-  for (left = dt_ms; left > 0; left -= 8) {
+  /*
+   * Whole 8 ms sub-steps only, with the remainder carried to the next call.
+   *
+   * The loop used to be `for (left = dt_ms; left > 0; left -= 8)`, which at the
+   * shelf's 30 ms clock ran 30 -> 22 -> 14 -> 6, i.e. FOUR sub-steps: 32 ms of
+   * physics for 30 ms of real time, every frame, and 8 ms invented for any
+   * frame shorter than one sub-step. Carrying the remainder keeps the
+   * integrator on the wall clock exactly: the same frames now average 3.75
+   * sub-steps, and no frame can step more time than has passed.
+   */
+  s->rem += dt_ms;
+  while (s->rem >= 8) {
     long long d = (long long)target - s->x;
     /* Both products overflow int32 at real velocities (11899 * 334347 is
      * 4.0e9), and an int-wrapped damping term turns the spring into an
@@ -65,6 +75,7 @@ static inline int fs_spring_step(fs_spring_t *s, int target, int dt_ms)
     s->v += (int)(((long long)FS_SPRING_K1 * d) >> 16)
           - (int)(((long long)FS_SPRING_K2 * s->v) >> 16);
     s->x += (int)(((long long)s->v * FS_SPRING_H) >> 16);
+    s->rem -= 8;
   }
 
   {

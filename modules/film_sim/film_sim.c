@@ -3416,9 +3416,9 @@ static void fs_gui_render_header(void) {
  * move was already a third of it -- at three stocks away that is a whole shelf
  * width in one frame, then a crawl. Measured against the old code at 30 ms:
  *
- *   1 shelf   480 ms, biggest step 17%      was 1050 ms, 33%
- *   3 shelves 630 ms, biggest step 17%      was 1260 ms, 33% (and 100% of the
- *                                                     first frame's travel)
+ *   1 shelf   510 ms, biggest step 17%      was 1050 ms, 33%
+ *   3 shelves 690 ms, biggest step 17%      was 1260 ms, 33% (and 100% of the
+ *                                                    first frame's travel)
  *
  * The integrator and its constants live in gui/fs_spring.h so that
  * se/hosttest/springtest can run this exact code.
@@ -3797,13 +3797,23 @@ static int fs_stock_preset(const char *name) {
       fs_name_has_ci(name, "UltraMax"))    return FS_PRESET_KODAK_GOLD;
   if (fs_name_has_ci(name, "CineStill 800T") ||
       fs_name_has_ci(name, "Vision") ||
+      fs_name_has_ci(name, "Eterna") ||
       fs_name_has_ci(name, "Color 800"))   return FS_PRESET_CINEMA;
   if (fs_name_has_ci(name, "CineStill 50D")) return FS_PRESET_NEUTRAL;
   if (fs_name_has_ci(name, "Tungsten"))    return FS_PRESET_TUNGSTEN;
+  /* The B&W list has to cover the imported stocks too: APX 25, Neopan 1600,
+   * HPS 800, FP4, BW400CN, Ortho 25, Retro 80S/100 and the two infrared films
+   * all fell through to NEUTRAL, so a black-and-white emulsion was previewed
+   * with a colour preset. */
   if (fs_name_has_ci(name, "Tri-X") || fs_name_has_ci(name, "T-Max") ||
       fs_name_has_ci(name, "HP5") || fs_name_has_ci(name, "Pan F") ||
       fs_name_has_ci(name, "Acros") || fs_name_has_ci(name, "Delta") ||
-      fs_name_has_ci(name, "Fomapan") || fs_name_has_ci(name, "XP2"))
+      fs_name_has_ci(name, "Fomapan") || fs_name_has_ci(name, "XP2") ||
+      fs_name_has_ci(name, "APX") || fs_name_has_ci(name, "Neopan") ||
+      fs_name_has_ci(name, "HPS") || fs_name_has_ci(name, "FP4") ||
+      fs_name_has_ci(name, "BW400") || fs_name_has_ci(name, "Ortho") ||
+      fs_name_has_ci(name, "Retro") || fs_name_has_ci(name, "Infrared") ||
+      fs_name_has_ci(name, "HIE"))
     return FS_PRESET_BW;
   return FS_PRESET_NEUTRAL;
 }

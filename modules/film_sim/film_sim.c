@@ -3839,7 +3839,7 @@ static int fs_develop_stock_index(int count) {
  * second menu that silently disagreed with the first one. */
 static int fs_stock_preset(const char *name) {
   if (!name)
-    return FS_PRESET_NEUTRAL;
+    return -1;
   /*
    * Every stock in the table has to answer here.
    *
@@ -3885,7 +3885,13 @@ static int fs_stock_preset(const char *name) {
       fs_name_has_ci(name, "Retro") || fs_name_has_ci(name, "Infrared") ||
       fs_name_has_ci(name, "HIE"))
     return FS_PRESET_BW;
-  return FS_PRESET_NEUTRAL;
+  /* -1, not NEUTRAL: "this stock is neutral" and "nothing here knows this
+   * stock" are different answers, and only the second one should fall back to
+   * film.sim.preset. Returning NEUTRAL for both is how a slide film ended up
+   * previewed as Fuji Superia. */
+  if (fs_name_has_ci(name, "Olympus"))
+    return FS_PRESET_NEUTRAL;
+  return -1;
 }
 
 static int fs_film_gen = 0; /* bumped whenever the film table is reloaded */
@@ -3900,7 +3906,7 @@ static int fs_lv_preset(void) {
   if (key != cache_key) {
     cache_key = key;
     int p = fs_stock_preset(film_active_table[idx].name);
-    if (p == FS_PRESET_NEUTRAL)
+    if (p < 0)
       p = fs_clamp_i(film_sim_preset, 0, FS_PRESET_COUNT - 1);
     cache_val = p;
   }

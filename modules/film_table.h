@@ -86,6 +86,7 @@ enum
     FILM_REALA_ACE,
     FILM_ETERNA,
     FILM_BLEACH_BYPASS,
+    FILM_OLYMPUS_NATURAL,
 
     FILM_COUNT
 };
@@ -146,7 +147,12 @@ static const film_t film_table[FILM_COUNT] =
     { "Nostalgic Neg",     "NNEG",  "Fujifilm",  0x84, 400, 0x58,   0,  2, +1, +1,  4700,  +3, +1, 0, "AMBER LIGHT, DENSE VIOLET BLUES, OPEN SHADOWS" },
     { "Reala Ace",         "RACE",  "Fujifilm",  0x84, 100, 0x48,  +2,  3, +1,  0,  5200,   0,  0, 0, "TRUE COLOUR, HARD BLACKS, SNAPPY SHOULDER" },
     { "Eterna",            "ETRN",  "Fujifilm",  0x84, 400, 0x58,  -2,  1, -2,  0,  5200,  -1, +2, 0, "FLAT CINEMA NEGATIVE, GREEN-CYAN SHADOWS" },
-    { "Bleach Bypass",     "BLPAS", "Process",   0x84, 400, 0x58,  +3,  4, -3,  0,  5500,   0,  0, 0, "SILVER RETAINED, CRUSHED BLACKS, NEAR GREY" }
+    { "Bleach Bypass",     "BLPAS", "Process",   0x84, 400, 0x58,  +3,  4, -3,  0,  5500,   0,  0, 0, "SILVER RETAINED, CRUSHED BLACKS, NEAR GREY" },
+    /* An authored look, not an emulsion: the colour is in films/OLYNAT.fs, and
+     * the numbers here are the picture style it is paired with -- Neutral base,
+     * no contrast or saturation push, because the recipe does that work and a
+     * style that also pushed would double it. */
+    { "Olympus Natural",   "OLYNAT", "Authored", 0x84, 200, 0x50,   0,  2,  0,  0,  5500,   0,  0, 0, "CLEAN COOL WHITES, HONEST GREENS, GENTLE S" }
 };
 
 static inline int film_clamp(int v, int lo, int hi)

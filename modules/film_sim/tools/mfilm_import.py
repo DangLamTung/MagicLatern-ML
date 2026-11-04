@@ -43,6 +43,7 @@ import urllib.request
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import cube2bin
+import lut2fs
 
 LUT_RAW = "https://raw.githubusercontent.com/YahiaAngelo/Film-Luts/main/luts/%s.cube"
 CACHE = os.path.join(HERE, ".cache", "filmluts")
@@ -241,12 +242,22 @@ def bake(cube_path, bin_path, n):
         f.write(b"FLUT" + struct.pack("<HH", n, 0) + body)
 
 
-def write_recipe(path, name, kind, iso):
+def write_recipe(path, name, kind, iso, cube=None):
+    """The recipe: the fitted tone and cast, plus grain and halation.
+
+    The curves come from lut2fs, which projects the cube onto the engine's
+    separable model -- without them the shutter path, which cannot read a
+    cube, graded these stocks to nothing. See lut2fs for the measurement of
+    what that projection does and does not carry."""
     g = grain_of(iso, kind)
     gs = 8 + (g // 4)
     hal = HALATION.get(kind, 40)
     thr = 226 if kind in ("cine", "neg") else 232
     rad = 16 if kind in ("cine", "neg") else 13
+    if cube:
+        f = lut2fs.fit(cube)
+        lut2fs.write_fs(path, name, kind, iso, f, g, gs, hal, thr, rad)
+        return g
     text = """VERSION   3
 NAME      %s
 DESC      %s
@@ -294,6 +305,9 @@ def main():
     ap.add_argument("--list", action="store_true")
     ap.add_argument("--add", nargs="*", default=[])
     ap.add_argument("--all-missing", action="store_true")
+    ap.add_argument("--refit", action="store_true",
+                    help="rewrite the .fs of stocks already on the target, from "
+                         "their cubes, without touching the XML or the .BIN")
     ap.add_argument("--out")
     ap.add_argument("--verify", metavar="PHOTO")
     args = ap.parse_args()
@@ -309,6 +323,9 @@ def main():
                   (mark, k, brand + " " + name, iso, kind, "model" if native else "lut"))
         print("\n%d stocks in the catalogue, %d already on the target" % (len(cat), len(have_names)))
         return 0
+
+    if args.refit:
+        return refit(args.out, cat, filmdir)
 
     want = []
     if args.all_missing:
@@ -358,7 +375,7 @@ def main():
         binpath = os.path.join(lutdir, code + ".BIN")
         bake(cube, binpath, 17)
         lut_rel = "ML/FILMSIM/LUT/%s.BIN" % code
-        g = write_recipe(os.path.join(recipedir, code + ".fs"), name, kind, iso)
+        g = write_recipe(os.path.join(recipedir, code + ".fs"), name, kind, iso, cube)
         write_xml(os.path.join(filmdir, "%02d_%s.xml" % (num, code.lower())),
                   name, code, brand, kind, iso, lut_rel)
         made.append((code, name, os.path.join(recipedir, code + ".fs"), binpath))
@@ -367,6 +384,46 @@ def main():
     print("\n%d stocks imported into %s" % (len(made), out))
     if args.verify:
         verify(made, args.verify)
+    return 0
+
+
+def refit(out, cat, filmdir):
+    """Rewrite every imported recipe with the fitted curves.
+
+    The XML and the .BIN are untouched: what changes is the only part the
+    shutter path can read. Stocks whose XML has no <lut> under
+    ML/FILMSIM/LUT/ are ours and are left alone.
+    """
+    byname = {n.lower(): k for (k, _b, n, _i, _kind, _nat) in cat}
+    n_ok = n_skip = 0
+    for fn in sorted(os.listdir(filmdir)):
+        if not fn.lower().endswith(".xml"):
+            continue
+        txt = open(os.path.join(filmdir, fn), errors="replace").read()
+
+        def tag(t):
+            a, b = txt.find("<%s>" % t), txt.find("</%s>" % t)
+            return txt[a + len(t) + 2:b].strip() if a >= 0 and b > 0 else ""
+
+        lut = tag("lut")
+        if "ML/FILMSIM/LUT/" not in lut:
+            continue
+        code, name = tag("code"), tag("name")
+        iso = int(tag("iso") or 0)
+        kind = {"Color Negative": "neg", "Slide": "slide",
+                "Cross Processed": "xpro", "Black & White": "bw",
+                "Cinema": "cine", "Print Film": "print"}.get(tag("type"), "neg")
+        key = byname.get(name.lower())
+        cube = fetch_cube(key) if key else None
+        if not cube:
+            print("%-24s no cube cached, recipe left as it is" % name)
+            n_skip += 1
+            continue
+        recipe = os.path.join(out, "ML", "FILM", code + ".fs")
+        write_recipe(recipe, name, kind, iso, cube)
+        print("%-24s -> %s.fs  (fitted from %s)" % (name, code, os.path.basename(cube)))
+        n_ok += 1
+    print("\n%d recipes refitted, %d left alone" % (n_ok, n_skip))
     return 0
 
 

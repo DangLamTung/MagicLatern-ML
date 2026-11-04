@@ -23,6 +23,7 @@
 
 #include "../engine/se.h"
 #include "../engine/look.h"
+#include "../engine/lut.h"
 #include "../engine/stock.h"
 #include "../../fs_yuvlook.h"
 
@@ -86,6 +87,134 @@ static int load_stock(const char *path, se_stock *st)
     rc = se_stock_parse(text, got, st);
     free(text);
     return rc == SE_OK && st->name[0] ? 0 : -1;
+}
+
+/* ------------------------------------------- 3D representations --- */
+/*
+ * The same look, resampled three ways and measured against the same rows.
+ * `tables` above is the shipping 2D form; these are the 3D forms it could be
+ * replaced with. Every one is fitted by running se_look itself, so nothing
+ * here is an independent approximation of the look -- it is the look, sampled.
+ */
+static int run_look_rgb(const se_look *lk, const unsigned char *in,
+                        unsigned char *out, int npix)
+{
+    int w = npix + (npix & 1);
+    size_t need = se_look_bytes(lk, w);
+    void *mem = malloc(need + 64);
+    unsigned char *buf = calloc((size_t)w * 3, 1);
+    unsigned char *obuf = calloc((size_t)w * 3, 1);
+    se_arena ar;
+    se_look_run *run;
+    int rc = -1;
+
+    if (!mem || !buf || !obuf) goto done;
+    memcpy(buf, in, (size_t)npix * 3);
+    se_arena_init(&ar, mem, need + 64);
+    if (se_look_begin(&run, lk, w, &ar) != SE_OK) goto done;
+    if (se_look_rows(run, buf, 1, copy_row, obuf) != SE_OK) goto done;
+    se_look_end(run, copy_row, obuf);
+    memcpy(out, obuf, (size_t)npix * 3);
+    rc = 0;
+done:
+    free(mem); free(buf); free(obuf);
+    return rc;
+}
+
+static void ycc_to_rgb(int y, int u, int v, unsigned char *o)
+{
+    o[0] = clamp8(y + ((359 * v) >> 8));
+    o[1] = clamp8(y - ((88 * u + 183 * v) >> 8));
+    o[2] = clamp8(y + ((454 * u) >> 8));
+}
+
+/* One sample's worst channel error: the two pixels of the pair, three channels. */
+static int samp_err(const unsigned char *a, const unsigned char *b, int p)
+{
+    int ip, c, dmax = 0;
+    for (ip = 0; ip < 2; ip++)
+        for (c = 0; c < 3; c++) {
+            int d = (int)a[(size_t)p * 6 + ip * 3 + c]
+                  - (int)b[(size_t)p * 6 + ip * 3 + c];
+            if (d < 0) d = -d;
+            if (d > dmax) dmax = d;
+        }
+    return dmax;
+}
+
+/* A joint (Y,U,V) lattice holding the graded (Y,U,V) at each node. */
+typedef struct { int n; int *y, *u, *v; } jlat;
+
+static int jlat_build(jlat *L, const se_look *lk, int n)
+{
+    int nn = n * n * n, i, iy, iu, iv;
+    unsigned char *in = malloc((size_t)nn * 3);
+    unsigned char *out = malloc((size_t)nn * 3);
+    int rc = -1;
+
+    L->n = n;
+    L->y = malloc(sizeof(int) * (size_t)nn);
+    L->u = malloc(sizeof(int) * (size_t)nn);
+    L->v = malloc(sizeof(int) * (size_t)nn);
+    if (!in || !out || !L->y || !L->u || !L->v) goto done;
+
+    i = 0;
+    for (iv = 0; iv < n; iv++)
+        for (iu = 0; iu < n; iu++)
+            for (iy = 0; iy < n; iy++) {
+                int y  = iy * 255 / (n - 1);
+                int u  = -128 + iu * 256 / (n - 1);
+                int v  = -128 + iv * 256 / (n - 1);
+                ycc_to_rgb(y, u, v, in + (size_t)i * 3);
+                i++;
+            }
+    if (run_look_rgb(lk, in, out, nn) != 0) goto done;
+
+    for (i = 0; i < nn; i++) {
+        int Y, U, V;
+        rgb_to_ycc(out + (size_t)i * 3, &Y, &U, &V);
+        L->y[i] = Y; L->u[i] = U; L->v[i] = V;
+    }
+    rc = 0;
+done:
+    free(in); free(out);
+    return rc;
+}
+
+static void jlat_free(jlat *L) { free(L->y); free(L->u); free(L->v); L->y = NULL; }
+
+/* Trilinear read, returning the graded (Y,U,V) for one input (y,u,v). */
+static void jlat_at(const jlat *L, int y, int u, int v, int *oy, int *ou, int *ov)
+{
+    const int n = L->n;
+    const double sy = 255.0 / (n - 1), sc = 256.0 / (n - 1);
+    double ty = y / sy, tu = (u + 128) / sc, tv = (v + 128) / sc;
+    int iy = (int)ty, iu = (int)tu, iv = (int)tv;
+    double fy = ty - iy, fu = tu - iu, fv = tv - iv;
+    int c;
+    int *dst[3];
+
+    if (iy > n - 2) { iy = n - 2; fy = 1.0; }
+    if (iu > n - 2) { iu = n - 2; fu = 1.0; }
+    if (iv > n - 2) { iv = n - 2; fv = 1.0; }
+    if (iy < 0) { iy = 0; fy = 0.0; }
+    if (iu < 0) { iu = 0; fu = 0.0; }
+    if (iv < 0) { iv = 0; fv = 0.0; }
+
+    dst[0] = &L->y[0]; dst[1] = &L->u[0]; dst[2] = &L->v[0];
+    for (c = 0; c < 3; c++) {
+        const int *d = dst[c];
+#define NODE(a, b, e) d[(size_t)((iv + (e)) * n * n + (iu + (b)) * n + (iy + (a)))]
+        double x00 = NODE(0,0,0) + (NODE(1,0,0) - NODE(0,0,0)) * fy;
+        double x10 = NODE(0,0,1) + (NODE(1,0,1) - NODE(0,0,1)) * fy;
+        double x01 = NODE(0,1,0) + (NODE(1,1,0) - NODE(0,1,0)) * fy;
+        double x11 = NODE(0,1,1) + (NODE(1,1,1) - NODE(0,1,1)) * fy;
+        double a = x00 + (x10 - x00) * fv;
+        double b = x01 + (x11 - x01) * fv;
+        int val = (int)(a + (b - a) * fu + 0.5);
+#undef NODE
+        if (c == 0) *oy = val; else if (c == 1) *ou = val; else *ov = val;
+    }
 }
 
 typedef struct { int n, sum, max; } stat;
@@ -307,14 +436,103 @@ int main(int argc, char **argv)
             printf("  hue, where |C|>40    mean %5.2f deg over %d px\n", sh / nh, nh);
     }
 
-    printf("\nthe cell table was probed at exact cell centres\n");
-    stat_show("cell centre", &centre);
+    printf("\nthe cell table was probed at exact cell centres\n");    stat_show("cell centre", &centre);
     stat_show("between cells", &offcentre);
     stat_show("luma 128 + centre", &centre128);
     printf("  (mean input |u|+|v|: centre %.1f, between %.1f -- a more saturated\n"
            "   set has a larger error, so compare these two with that in mind)\n",
            centre.n ? (double)csum_c / centre.n : 0.0,
            offcentre.n ? (double)csum_o / offcentre.n : 0.0);
+
+    /* ------------------------------------------- 3D representations --- */
+    {
+        unsigned char *rgb_in = malloc((size_t)width * 3);
+        unsigned char *r3 = malloc((size_t)width * 3);
+        uint16_t *u16 = malloc(sizeof(uint16_t) * (size_t)width * 3);
+        stat s_cube = {0}, s_j8 = {0}, s_j12 = {0}, s_j16 = {0};
+        int kb_cube = 0, kb_j[3] = {0, 0, 0};
+
+        if (!rgb_in || !r3 || !u16) {
+            fprintf(stderr, "3d: out of memory\n");
+        } else {
+            unpack(uyvy, rgb_in, width);
+
+            /* 17^3 RGB cube, read through the shipping tetrahedral apply. */
+            {
+                static se_lut3 cube;
+                void *lm = malloc(512 * 1024);
+                int N3 = 17, nn = N3 * N3 * N3, i3;
+
+                if (lm) {
+                    se_arena ar2;
+                    unsigned char *lin = malloc((size_t)nn * 3);
+                    unsigned char *lout = malloc((size_t)nn * 3);
+                    int bi, gi, ri, x;
+
+                    se_arena_init(&ar2, lm, 512 * 1024);
+                    if (lin && lout && se_lut3_identity(&cube, N3, &ar2) == SE_OK) {
+                        i3 = 0;
+                        for (bi = 0; bi < N3; bi++)
+                        for (gi = 0; gi < N3; gi++)
+                        for (ri = 0; ri < N3; ri++) {
+                            lin[i3 * 3 + 0] = (unsigned char)(ri * 255 / (N3 - 1));
+                            lin[i3 * 3 + 1] = (unsigned char)(gi * 255 / (N3 - 1));
+                            lin[i3 * 3 + 2] = (unsigned char)(bi * 255 / (N3 - 1));
+                            i3++;
+                        }
+                        if (run_look_rgb(&lk, lin, lout, nn) == 0) {
+                            for (i3 = 0; i3 < nn * 3; i3++)
+                                cube.data[i3] = (uint16_t)(lout[i3] * 257);
+                            for (x = 0; x < width * 3; x++)
+                                u16[x] = (uint16_t)(rgb_in[x] * 257);
+                            se_lut3_apply_row(&cube, u16, width);
+                            for (x = 0; x < width * 3; x++)
+                                r3[x] = (unsigned char)((u16[x] + 128u) / 257u);
+                            for (p = 0; p < ns; p++)
+                                stat_add(&s_cube, samp_err(r3, rgb_t, p));
+                            kb_cube = (int)se_lut3_bin_bytes(N3);
+                        }
+                    }
+                    free(lin); free(lout);
+                }
+                free(lm);
+            }
+
+            /* Joint (Y,U,V) lattice: no RGB conversion at run time. */
+            {
+                static const int sizes[3] = { 8, 12, 16 };
+                int k;
+                for (k = 0; k < 3; k++) {
+                    jlat L;
+                    if (jlat_build(&L, &lk, sizes[k]) != 0) { jlat_free(&L); continue; }
+                    for (p = 0; p < ns; p++) {
+                        unsigned char px[3];
+                        int Y, U, V;
+                        jlat_at(&L, s[p].y, s[p].u, s[p].v, &Y, &U, &V);
+                        ycc_to_rgb(Y, U, V, px);
+                        memcpy(r3 + (size_t)p * 6, px, 3);
+                        memcpy(r3 + (size_t)p * 6 + 3, px, 3);
+                    }
+                    for (p = 0; p < ns; p++) {
+                        stat *t = k == 0 ? &s_j8 : (k == 1 ? &s_j12 : &s_j16);
+                        stat_add(t, samp_err(r3, rgb_t, p));
+                    }
+                    kb_j[k] = (int)((size_t)sizes[k] * sizes[k] * sizes[k] * 6);
+                    jlat_free(&L);
+                }
+            }
+
+            printf("\n3D forms of the same look, same samples, against the same develop\n");
+            printf("  %-34s %s\n", "shipping tables 2x2D (3084 B)", "(see 'all' above)");
+            stat_show("17^3 RGB cube, tetrahedral", &s_cube);
+            stat_show("joint (y,u,v) 8^3, 3.0 KB", &s_j8);
+            stat_show("joint (y,u,v) 12^3, 10.1 KB", &s_j12);
+            stat_show("joint (y,u,v) 16^3, 24.0 KB", &s_j16);
+            printf("  (cube on card %d B, joints %d/%d/%d B)\n",
+                   kb_cube, kb_j[0], kb_j[1], kb_j[2]);
+        }
+        free(rgb_in); free(r3); free(u16);
+    }
 
     free(uyvy); free(tab); free(rgb_t); free(rgb_k); free(rgb_out);
     return 0;

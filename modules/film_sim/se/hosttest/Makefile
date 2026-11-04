@@ -44,6 +44,10 @@ lvgrade: lvgrade.c $(SE_DIR)/se_libgcc.c $(SE_DIR)/../fs_yuvlook.c $(ENG_SRC) st
 
 # tableerr: how far the shot-time tables fall from the full grade, by luma
 # and by chroma. Answers "what does the separable form lose" with numbers.
+# springtest: the shelf's spring, at the loop's real rate. No engine needed.
+springtest: springtest.c
+	$(CC) $(CFLAGS) -o $@ $^
+
 # bench_grade: the preview grade and the shot grade, on one LiveView frame.
 bench_grade: bench_grade.c $(SE_DIR)/se_libgcc.c $(SE_DIR)/../fs_yuvlook.c $(ENG_SRC) stubs.c
 	$(CC) $(CFLAGS) $(CPPFLAGS) -I$(SE_DIR)/.. -o $@ $^ $(LDLIBS)
@@ -81,7 +85,7 @@ match: lookmatch
 	./lookmatch "$(CR2)" "$(STOCK)"
 
 clean:
-	rm -f $(BIN) lookmatch rawdev grade_jpeg lvgrade tabledump tableerr bench_grade
+	rm -f $(BIN) lookmatch rawdev grade_jpeg lvgrade tabledump tableerr bench_grade springtest
 
 .PHONY: all check match clean
 

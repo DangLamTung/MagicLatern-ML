@@ -40,6 +40,7 @@
 #include "fs_yuvhook.h"
 #include "fs_yuvlook.h"
 #include "gui/fsg.h"
+#include "gui/fs_spring.h"
 #include "se/se_cam.h"
 
 #define FS_PATH_LEN 128
@@ -2663,8 +2664,9 @@ static const char *fs_stock_alias(const film_xml_t *f);
 
 /* The shelf screen. All drawing lives in gui/fsg.c so the same pixels can be
  * rendered on a desktop; this only feeds it the current state. */
-static int fs_anim_scroll = 0; /* strip position, 1/256 frame units */
-static int fs_anim_target = 0;
+static fs_spring_t fs_anim;   /* strip position and velocity, see gui/fs_spring.h */
+static int fs_anim_frames = 0;  /* frames drawn in the current glide */
+static uint32_t fs_anim_start = 0;
 
 /* ---- the film's own colours --------------------------------------------
  *
@@ -3105,7 +3107,7 @@ static void fs_shelf_state(fsg_shelf_t *st) {
     snprintf(counter, sizeof counter, "%02d / %02d", idx + 1, count);
     st->counter = counter;
   }
-  st->scroll = fs_anim_scroll;
+  st->scroll = fs_anim.x >> 8; /* Q16 frames -> 1/256 frame units */
   st->tick = get_ms_clock();
   st->hint_r = fs_lv_status();
 }
@@ -3306,19 +3308,42 @@ static void fs_gui_render(void) {
   fsg_draw_shelf(&st);
 }
 
-/* Ease the strip towards the selected stock; returns 1 while it is moving. */
-static int fs_shelf_animate(void) {
+/*
+ * Move the strip towards the selected stock; returns 1 while it is moving.
+ *
+ * A spring, not an ease. `step = d/3` had no velocity, so the first tick of a
+ * move was already a third of it -- at three stocks away that is a whole shelf
+ * width in one frame, then a crawl. Measured against the old code at 30 ms:
+ *
+ *   1 shelf   480 ms, biggest step 17%      was 1050 ms, 33%
+ *   3 shelves 630 ms, biggest step 17%      was 1260 ms, 33% (and 100% of the
+ *                                                     first frame's travel)
+ *
+ * The integrator and its constants live in gui/fs_spring.h so that
+ * se/hosttest/springtest can run this exact code.
+ */
+static int fs_shelf_animate(int dt_ms) {
   int count = (film_active_count > 0) ? film_active_count : FILM_COUNT;
   int idx = fs_clamp_i(film_sim_stock, 0, count - 1);
-  fs_anim_target = idx * 256;
-  int d = fs_anim_target - fs_anim_scroll;
-  if (!d)
-    return 0;
-  int step = d / 3;
-  if (step == 0)
-    step = d > 0 ? 1 : -1;
-  fs_anim_scroll += step;
-  return 1;
+  int moving = fs_spring_step(&fs_anim, idx * 65536, dt_ms);
+
+  /* One line per glide, so a camera run says how long the strip actually took
+   * and how many frames it drew, instead of it having to be believed. */
+  if (moving) {
+    if (!fs_anim_frames)
+      fs_anim_start = get_ms_clock();
+    fs_anim_frames++;
+    return 1;
+  }
+  if (fs_anim_frames) {
+    /* The step that settled snapped the strip onto the stock; paint that
+     * position rather than leaving the last moving frame on the panel. */
+    fs_log("shelf: glide %d frames, %d ms, to stock %d",
+           fs_anim_frames, (int)(get_ms_clock() - fs_anim_start), idx);
+    fs_anim_frames = 0;
+    return 1;
+  }
+  return 0;
 }
 
 /*
@@ -3452,6 +3477,16 @@ static int fs_shelf_run(void) {
   fs_log("shelf: running");
   fs_log_flush();
   beep_times(1); /* heard = the handler ran and the task started */
+
+  /* Open with the strip already on the selected stock. A spring starting at 0
+   * would glide in from the first stock every time the screen came up, which
+   * after a card change means a sweep across the whole shelf before the user
+   * has touched anything. */
+  {
+    int count = (film_active_count > 0) ? film_active_count : FILM_COUNT;
+    fs_anim.x = fs_clamp_i(film_sim_stock, 0, count - 1) * 65536;
+    fs_anim.v = 0;
+  }
   fs_screen_take();
   fs_log("shelf: screen taken (vram=0x%x on=%d lv=%d gd=%d)",
          (unsigned)bmp_vram_real(), bmp_is_on(), lv, get_global_draw());
@@ -3469,15 +3504,18 @@ static int fs_shelf_run(void) {
   uint32_t t0 = get_ms_clock();
 
   while (fs_gui_active) {
-    /* The strip eases towards the selected stock and the header sheen moves on
-     * its own, so the screen is redrawn on a clock, not only on a keypress. */
-    if (get_ms_clock() - fs_anim_ms > 70) {
+    /* The strip springs towards the selected stock and the header sheen moves
+     * on its own, so the screen is redrawn on a clock, not only on a keypress.
+     *
+     * 30 ms, not 70: the loop already sleeps 30 ms at the end of every pass,
+     * so this is the fastest rate it can draw without changing the sleep, and
+     * a spring needs the rate to look like one. The repaint is skipped the
+     * moment the spring settles, so the cost is paid only while moving. */
+    if (get_ms_clock() - fs_anim_ms > 30) {
+      int dt = (int)(get_ms_clock() - fs_anim_ms);
       fs_anim_ms = get_ms_clock();
-      /* The strip eases towards the selection: repaint only while it is
-       * actually moving, and let the header sheen tick at a quarter of that
-       * rate. Marks the screen dirty 4x a second at rest instead of 14x, which
-       * is CPU the develop wants and tearing the panel does not need. */
-      if (fs_shelf_animate())
+      /* The header sheen keeps its own, slower clock. */
+      if (fs_shelf_animate(dt))
         fs_gui_dirty = 1;
       if (get_ms_clock() - fs_sheen_ms > 260) {
         fs_sheen_ms = get_ms_clock();
@@ -3711,9 +3749,10 @@ static int fs_darkroom_run(void) {
       break;
     }
     if (get_ms_clock() - fs_anim_ms > 70) {
+      int dt = (int)(get_ms_clock() - fs_anim_ms);
       fs_anim_ms = get_ms_clock();
       fs_anim_tick++;
-      fs_shelf_animate();
+      fs_shelf_animate(dt);
       fs_darkroom_dirty = 1;
     }
     if (fs_prov_tick())

@@ -1316,6 +1316,10 @@ static void fs_dump_task(void *unused) {
 /* Set by ML core; called once the frame in dst_buf is complete. */
 extern void display_filter_mark_written(void);
 
+/* Declared where the screens are; read here so the filter can stand down. */
+static volatile int fs_gui_active;
+static volatile int fs_darkroom_active;
+
 /* Set for the whole of a develop (see fs_develop_run); declared here because
  * the display filter has to stand down while it is set. */
 static volatile int fs_develop_active = 0;
@@ -1378,6 +1382,25 @@ static unsigned int fs_display_filter(unsigned int ctx) {
    * nothing should be flipped to.
    */
   if (fs_develop_active) {
+    fs_valid_frame = 0;
+    return 0;
+  }
+
+  /*
+   * A module screen is up: leave the panel to it as well.
+   *
+   * The shelf and the darkroom are full-screen and opaque, so nothing of the
+   * graded LiveView frame is visible while they are open -- but the filter kept
+   * running at ~30 fps behind them, and the log from the 6D says what that
+   * cost: `shelf: paint` lines showing EVERY repaint as a full 480-row one at
+   * 160-215 ms, 3-4 a second, while `[livev_hiprio_task] fs_sync` and
+   * `yuvgrade: re-baked` fired underneath. Both jobs want the one core. The
+   * develop already declines for exactly this reason.
+   *
+   * It also kept fs_stat_frames moving, and the shelf's footer shows that
+   * count -- see fs_lv_status_key() for what that did to the repaint rate.
+   */
+  if (fs_gui_active || fs_darkroom_active) {
     fs_valid_frame = 0;
     return 0;
   }
@@ -3383,17 +3406,39 @@ static void fs_paint_band(int y0, int y1, void (*fn)(void)) {
   fs_paint_account(get_ms_clock() - t0, film_sim_direct ? 0 : (y1 - y0));
 }
 
-/* The footer carries the LiveView status, so if that line changed the whole
- * screen has to be redrawn -- a band repaint would leave the old text. */
-static char fs_painted_hint[32];
+/*
+ * The footer carries the LiveView status, so if that line changed the whole
+ * screen has to be redrawn -- a band repaint would leave the old text.
+ *
+ * What is compared is the BRANCH of fs_lv_status(), not its text. The text of
+ * the active case is "LV %d fr" and that count moves with every filtered
+ * frame, so comparing the string turned nearly every pass into a full-screen
+ * repaint: the camera's log shows 118 `shelf: paint` lines and all but three
+ * of them at 480 rows per frame, never the 94-row band this was built for.
+ */
+#define FS_HINT_KEY_TEXTS 5
+static int fs_painted_hint = -1;
+
+/* 0 = frames flowing, 1 = Global Draw off, 2 = press INFO, 3 = LV off,
+ * 4 = waiting. Same order as the branches in fs_lv_status(). */
+static int fs_lv_status_key(void) {
+  if (fs_stat_frames > 0)
+    return 0;
+  if (!get_global_draw_setting())
+    return 1;
+  if (lv && lv_disp_mode)
+    return 2;
+  if (!lv)
+    return 3;
+  return 4;
+}
 
 static void fs_gui_render(void) {
   fsg_shelf_t st;
   fs_shelf_state(&st);
   fs_picture_palette(st.stock.palette);
   fsg_draw_shelf(&st);
-  snprintf(fs_painted_hint, sizeof fs_painted_hint, "%s",
-           st.hint_r ? st.hint_r : "");
+  fs_painted_hint = fs_lv_status_key();
 }
 
 static void fs_gui_render_strip(void) {
@@ -3654,7 +3699,7 @@ static int fs_shelf_run(void) {
       }
       /* The footer's LiveView status can change under the screen; if it did,
        * only a full redraw will show the new text. */
-      if (strcmp(fs_lv_status(), fs_painted_hint))
+      if (fs_lv_status_key() != fs_painted_hint)
         fs_gui_dirty = 1;
     }
     if (fs_prov_tick())

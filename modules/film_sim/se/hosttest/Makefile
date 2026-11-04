@@ -60,6 +60,9 @@ springtest: springtest.c
 bench_grade: bench_grade.c $(SE_DIR)/se_libgcc.c $(SE_DIR)/../fs_yuvlook.c $(ENG_SRC) stubs.c
 	$(CC) $(CFLAGS) $(CPPFLAGS) -I$(SE_DIR)/.. -o $@ $^ $(LDLIBS)
 
+lv3d: lv3d.c $(SE_DIR)/se_libgcc.c $(SE_DIR)/../fs_yuvlook.c $(ENG_SRC) stubs.c
+	$(CC) $(CFLAGS) $(CPPFLAGS) -o $@ $^ $(LDLIBS)
+
 tableerr: tableerr.c $(SE_DIR)/se_libgcc.c $(SE_DIR)/../fs_yuvlook.c $(ENG_SRC) stubs.c
 	$(CC) $(CFLAGS) $(CPPFLAGS) -o $@ $^ $(LDLIBS)
 
@@ -93,7 +96,7 @@ match: lookmatch
 	./lookmatch "$(CR2)" "$(STOCK)"
 
 clean:
-	rm -f $(BIN) lookmatch rawdev grade_jpeg lvgrade tabledump tableerr bench_grade springtest fs2cube lutchk
+	rm -f $(BIN) lookmatch rawdev grade_jpeg lvgrade tabledump tableerr bench_grade lv3d springtest fs2cube lutchk
 
 .PHONY: all check match clean
 

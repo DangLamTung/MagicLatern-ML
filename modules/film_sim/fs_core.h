@@ -392,6 +392,135 @@ static void fs_core_process_rows(const fs_lut_t *lut, const void *src, void *dst
 }
 
 /* ======================================================================
+ * The joint form of the same look: one lattice indexed by (y, Cb, Cr).
+ *
+ * The separable tables above multiply a per-luma gain by a per-hue gain, so
+ * a change in hue cannot also depend on how bright the pixel is. Measured
+ * against the develop on the same 1444 samples, that form is 7.7-29.7
+ * levels out; this one is 5.3-10.9 at the same 2 KB (se/hosttest/tableerr).
+ *
+ * Lattice order is y fastest, then Cb, then Cr -- the same order
+ * se_look_bake_yuv3() fills, so each 8-node cell is 16 contiguous bytes.
+ * ====================================================================== */
+#ifndef FS_UV3_NY
+#define FS_UV3_NY 8                    /* must match SE_YUV3_NY in look.h  */
+#endif
+#ifndef FS_UV3_NC
+#define FS_UV3_NC 17                   /* must match SE_YUV3_NC in look.h  */
+#endif
+/* (nodes-1) * 65536 / 255, so 0..255 maps onto 0..nodes-1 in 16.16. */
+#define FS_UV3_SY (((FS_UV3_NY - 1) * 65536 + 254) / 255)
+#define FS_UV3_SC (((FS_UV3_NC - 1) * 65536 + 254) / 255)
+
+static void fs_core_process_rows3(const unsigned char *curve, const short *uv,
+                                  const void *src, void *dst,
+                                  int pitch, int row0, int row1,
+                                  int grain, unsigned int *rnd_state)
+{
+    int words = pitch >> 2;
+    unsigned int rnd = *rnd_state;
+
+    const unsigned int * sp = (const unsigned int *)src + (unsigned int)row0 * words;
+    unsigned int * dp = (unsigned int *)dst + (unsigned int)row0 * words;
+
+    /* node strides, in shorts: one step in y, in Cb, in Cr */
+    const int ky = 3, ku = FS_UV3_NY * 3, kv = FS_UV3_NY * FS_UV3_NC * 3;
+
+    for (int y = row0; y < row1; y++)
+    {
+        for (int i = 0; i < words; i++)
+        {
+            unsigned int px = sp[i];
+
+            int u  = fs_chroma_signed(px);
+            int ya = (px >>  8) & 0xFF;
+            int v  = fs_chroma_signed(px >> 16);
+            int yb = (px >> 24) & 0xFF;
+
+            int oa = curve[ya];
+            int ob = curve[yb];
+            /*
+             * Index the lattice by the INPUT luma, not the graded one: the
+             * nodes were baked at input luma y, so passing the tone-curved
+             * value looks up a different row and the chroma comes out of the
+             * wrong cell. Measured on a real frame, that mistake cost more
+             * (11.1 levels) than the whole separable form it was meant to
+             * beat (7.0).
+             */
+            int ym = (ya + yb) >> 1;
+
+            int ty = ym * FS_UV3_SY;
+            int tu = (u + 128) * FS_UV3_SC;
+            int tv = (v + 128) * FS_UV3_SC;
+            int iy = ty >> 16, iu = tu >> 16, iv = tv >> 16;
+            int fy = (ty >> 8) & 0xFF, fu = (tu >> 8) & 0xFF, fv = (tv >> 8) & 0xFF;
+
+            /* the top node of an axis has no neighbour: interpolate to it */
+            if (iy > FS_UV3_NY - 2) { iy = FS_UV3_NY - 2; fy = 256; }
+            if (iu > FS_UV3_NC - 2) { iu = FS_UV3_NC - 2; fu = 256; }
+            if (iv > FS_UV3_NC - 2) { iv = FS_UV3_NC - 2; fv = 256; }
+
+            const short *base = uv + iy * ky + iu * ku + iv * kv;
+            int out3[3];                 /* dy, Cb, Cr */
+            /*
+             * Tetrahedral, not trilinear. The cube splits into six tetrahedra
+             * and the ordering of the three fractions picks one; the sample
+             * then needs four corners instead of eight, and three differences
+             * instead of seven interpolations. Same table, same result class,
+             * roughly half the work -- and this runs on every LiveView frame.
+             */
+            {
+                const short *ca, *cb2;
+                int wa, wb, wc;
+
+                if (fy >= fv) {
+                    if (fv >= fu)      { ca = base + ky; cb2 = ca + kv; wa = fy - fv; wb = fv - fu; wc = fu; }
+                    else if (fy >= fu) { ca = base + ky; cb2 = ca + ku; wa = fy - fu; wb = fu - fv; wc = fv; }
+                    else               { ca = base + ku; cb2 = ca + ky; wa = fu - fy; wb = fy - fv; wc = fv; }
+                } else {
+                    if (fu >= fv)      { ca = base + ku; cb2 = ca + kv; wa = fu - fv; wb = fv - fy; wc = fy; }
+                    else if (fu >= fy) { ca = base + kv; cb2 = ca + ku; wa = fv - fu; wb = fu - fy; wc = fy; }
+                    else               { ca = base + kv; cb2 = ca + ky; wa = fv - fy; wb = fy - fu; wc = fu; }
+                }
+
+                for (int c = 0; c < 3; c++)
+                {
+                    int v000 = base[c];
+                    int v111 = base[c + ky + ku + kv];
+                    /* wa + wb + wc == the largest fraction, so the corner at
+                     * the origin takes what is left of 256 */
+                    out3[c] = (v000 * (256 - wa - wb - wc)
+                               + ca[c]  * wa
+                               + cb2[c] * wb
+                               + v111   * wc) >> 8;
+                }
+            }
+
+            /* the tone curve carries luma, the node carries what the colour
+             * does to it -- per pixel, so the pair's two lumas stay distinct */
+            oa = fs_clamp_i(oa + out3[0], 0, 255);
+            ob = fs_clamp_i(ob + out3[0], 0, 255);
+
+            if (grain)
+            {
+                rnd ^= rnd << 13;
+                rnd ^= rnd >> 17;
+                rnd ^= rnd << 5;
+                oa = fs_clamp_i(oa + ((((int)(rnd & 0xFF) - 128) * grain) >> 7), 0, 255);
+                ob = fs_clamp_i(ob + ((((int)((rnd >> 8) & 0xFF) - 128) * grain) >> 7), 0, 255);
+            }
+
+            dp[i] = fs_pack_px(out3[1], oa, out3[2], ob);
+        }
+
+        sp += words;
+        dp += words;
+    }
+
+    *rnd_state = rnd;
+}
+
+/* ======================================================================
  * Raw develop path: sensor Bayer -> 8-bit RGB through the same look.
  *
  * Lives here, not in the module, so tools/sim can run the exact code the

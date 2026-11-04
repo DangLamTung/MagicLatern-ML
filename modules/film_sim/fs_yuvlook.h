@@ -19,6 +19,10 @@ const char *fs_yuvlook_name(void);
 #include "se/engine/look.h"
 const se_yuvtbl *fs_yuvlook_table(void);
 
+/* The same look as a joint (y,u,v) lattice -- the form the LiveView filter
+ * applies. NULL until a bake succeeds. */
+const se_yuv3 *fs_yuvlook_uv3(void);
+
 /* Millisecs spent, 0 when nothing was done. */
 uint32_t fs_yuvlook_apply(unsigned char *buf, int width, int height, int stride);
 

@@ -76,6 +76,10 @@ static CONFIG_INT("film.sim.grain", film_sim_grain, 8);
  * to BE the look rather than sit under it.
  */
 static CONFIG_INT("film.sim.lut", film_sim_lut, 0);
+/* Grade LiveView through the joint (y,u,v) lattice instead of the
+ * preset tables. Off by default: it is ~3.5x the lookups and the
+ * camera's frame budget for that is unmeasured. */
+static CONFIG_INT("film.sim.lv3d", film_sim_lv3d, 0);
 static CONFIG_INT("film.sim.fps", film_sim_fps, 30);
 static CONFIG_INT("film.sim.user1", film_sim_user1,
                   1); /* inject into User 1 + select it */
@@ -956,7 +960,7 @@ static void fs_sync() {
   if (film_sim_user1 && preset != fs_user1_last_preset) {
     fs_user1_dirty = 1;
   }
-  if (film_sim_yuvrows > 0) {
+  if (film_sim_yuvrows > 0 || film_sim_lv3d) {
     fs_yuvlook_dirty = 1;
   }
   /* Framing is an aspect mode: the hook needs it even when nothing else moved. */
@@ -1011,6 +1015,42 @@ static void fs_aspect_bars(void *dst, int pitch, int row0, int row1) {
   if (!fs_core_aspect_ratio(film_sim_aspect, &num, &den))
     return;
   fs_core_aspect_bars(dst, pitch, pitch / 2, row0, row1, num, den);
+}
+
+/* The apply lives in fs_core.h and the bake in engine/look.h; if their node
+ * counts ever drift the filter would read past the table the bake filled. */
+typedef char fs_lv3d_shape_check[(SE_YUV3_NY == FS_UV3_NY &&
+                                  SE_YUV3_NC == FS_UV3_NC) ? 1 : -1];
+
+static int fs_lv3d_logged = -1;
+
+/*
+ * Which form grades a LiveView row range.
+ *
+ * The joint lattice is baked from the same stock look the develop uses, so the
+ * panel and the file agree about what is loaded. The preset tables are the
+ * older separable form. Measured on the host against the develop on the same
+ * frame (se/hosttest/lv3d.c): lattice 4.12 levels mean, preset tables 8.82 --
+ * but the lattice costs ~3.5x the table lookups, and the camera's budget for
+ * that has not been measured, so it is behind a switch and off by default.
+ * Whichever runs, ML/LOGS/FILMSIM.LOG carries the per-frame grade_ms.
+ */
+static void fs_lv_grade(const void *src, void *dst, int pitch, int row0, int row1)
+{
+  const se_yuv3 *t3 = film_sim_lv3d ? fs_yuvlook_uv3() : NULL;
+
+  if (fs_lv3d_logged != (t3 ? 1 : 0)) {
+    fs_lv3d_logged = t3 ? 1 : 0;
+    fs_log("lv: grading with %s",
+           t3 ? "the joint (y,u,v) lattice" : "the preset tables");
+    fs_log_flush();
+  }
+
+  if (t3)
+    fs_core_process_rows3(t3->y, t3->v, src, dst, pitch, row0, row1,
+                          fs_lut.grain_amp, &fs_rnd);
+  else
+    fs_core_process_rows(&fs_lut, src, dst, pitch, row0, row1, &fs_rnd);
 }
 
 static void FAST fs_process_frame(void *src, void *dst) {
@@ -1139,7 +1179,7 @@ static void FAST fs_process_frame(void *src, void *dst) {
       memcpy(fs_snap, src, total);
       copy_ms += get_ms_clock() - tc;
       tc = get_ms_clock();
-      fs_core_process_rows(&fs_lut, fs_snap, dst, pitch, row0, row1, &fs_rnd);
+      fs_lv_grade(fs_snap, dst, pitch, row0, row1);
       grade_ms += get_ms_clock() - tc;
       if (row0 > 0)
         memcpy(dst, src, (size_t)row0 * pitch);
@@ -1149,7 +1189,7 @@ static void FAST fs_process_frame(void *src, void *dst) {
                (size_t)(height - row1) * pitch);
     } else {
       uint32_t tg = get_ms_clock();
-      fs_core_process_rows(&fs_lut, src, dst, pitch, row0, row1, &fs_rnd);
+      fs_lv_grade(src, dst, pitch, row0, row1);
       grade_ms += get_ms_clock() - tg;
       if (row0 > 0)
         memcpy(dst, src, (size_t)row0 * pitch);
@@ -1160,7 +1200,7 @@ static void FAST fs_process_frame(void *src, void *dst) {
     }
     fs_aspect_bars(dst, pitch, row0, row1);
   } else if (film_sim_enable) {
-    fs_core_process_rows(&fs_lut, src, dst, pitch, row0, row1, &fs_rnd);
+    fs_lv_grade(src, dst, pitch, row0, row1);
     fs_aspect_bars(dst, pitch, row0, row1);
   } else {
     if (src != dst) {
@@ -2000,7 +2040,11 @@ static void fs_slot_backup_task(void *unused) {
       }
     }
 
-    if (fs_yuvlook_dirty && film_sim_yuvrows > 0) {
+    /* The bake serves two consumers: the in-shutter grade (yuvrows) and the
+     * LiveView lattice. Gating it on yuvrows alone left LiveView on the
+     * preset tables when the shutter grade was off, i.e. the switch did
+     * nothing exactly when a user would try it. */
+    if (fs_yuvlook_dirty && (film_sim_yuvrows > 0 || film_sim_lv3d)) {
       fs_yuvlook_dirty = 0;
       char stk[FS_PATH_LEN];
       if (fs_active_stock_path(stk, sizeof stk, NULL)) {
@@ -6433,6 +6477,16 @@ static struct menu_entry film_sim_menu[] = {
         .help = "Grain amount on top of what the stock itself asks for.",
     },
     {
+        .name = "LiveView 3D",
+        .priv = &film_sim_lv3d,
+        .max = 1,
+        .help = "Grade the preview through a joint (y,u,v) lattice baked from "
+                "the stock instead of the preset tables: 4.1 levels off the "
+                "develop against 7.0, with 7x less chroma error (host test "
+                "se/hosttest/lv3d.c). Costs about 3.5x the table lookups, so "
+                "watch FILMSIM.LOG's grade_ms before leaving it on.",
+    },
+    {
         .name = "Develop",
         .select = menu_open_submenu,
         .icon_type = IT_ACTION,
@@ -6919,6 +6973,7 @@ MODULE_CONFIG(film_sim_dbglog)
 MODULE_CONFIG(film_sim_art)
 MODULE_CONFIG(film_sim_shotgrade)
 MODULE_CONFIG(film_sim_lut)
+MODULE_CONFIG(film_sim_lv3d)
 MODULE_CONFIG(film_sim_neutralcap)
 MODULE_CONFIG(film_sim_sharp)
 MODULE_CONFIG(film_sim_direct)

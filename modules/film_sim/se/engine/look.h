@@ -189,6 +189,52 @@ typedef struct {
 
 void se_look_bake_yuv(const se_look *lk, se_yuvtbl *t);
 
+/* ------------------------------------------------- joint (y,u,v) lattice -- */
+/*
+ * The LiveView form: a tone curve plus ONE lattice indexed by all three of
+ * (y, Cb, Cr) at once, holding the graded (Cb, Cr).
+ *
+ * This exists because the separable form cannot express the two relations a
+ * look actually uses -- hue rotation and chroma that depends on luma and hue
+ * together -- and the measurement says so: against the same develop rows on
+ * the same samples, the separable shot table is 7.7-29.7 levels out while a
+ * joint lattice of the same size is 5.3-10.9 (se/hosttest/tableerr.c).
+ *
+ * Indexed y fastest, then u, then v -- the order the module's apply loop
+ * walks, so its inner interpolation stays in one cache line.
+ */
+/*
+ * The axes are NOT all the same size, and that is measured, not assumed: a
+ * photograph uses the whole 0..255 luma range but its chroma sits near zero,
+ * so equal steps on Cb and Cr waste most of their nodes on colours no scene
+ * contains. A 8^3 lattice costs 11.4 levels mean on a real frame while the
+ * separable form gets 7.0; widening only the chroma axes fixes that at the
+ * same node count per axis (se/hosttest/lv3d.c).
+ */
+#ifndef SE_YUV3_NY
+#define SE_YUV3_NY 8                       /* nodes along luma              */
+#endif
+#ifndef SE_YUV3_NC
+#define SE_YUV3_NC 17                      /* nodes along Cb, and along Cr  */
+#endif
+#define SE_YUV3_NODES (SE_YUV3_NY * SE_YUV3_NC * SE_YUV3_NC)
+typedef struct {
+    uint8_t y[256];                        /* graded luma at each luma      */
+    /*
+     * Per node: how much brighter or darker this COLOUR grades than grey of
+     * the same luma (dy), and where its chroma goes (Cb, Cr).
+     *
+     * dy is not optional. Without it the lattice fixed chroma (dCb 0.38
+     * against the develop) but left luma 3.4x worse than the separable form
+     * (dY 3.50 vs 1.04), because a saturated pixel does not grade to the same
+     * brightness as a grey one. That is the hue->luma relation the separable
+     * form carries as dy[cell].
+     */
+    int16_t v[SE_YUV3_NODES * 3];          /* dy, Cb, Cr per (y,u,v)        */
+} se_yuv3;
+
+void se_look_bake_yuv3(const se_look *lk, se_yuv3 *t);
+
 /* ----------------------------------------------------- streaming ----- */
 /*
  * Halation needs rows above and below the one being written, and the

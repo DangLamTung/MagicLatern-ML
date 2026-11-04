@@ -54,6 +54,8 @@
 
 /* The tables themselves, baked in look.c by running the real grade. */
 static se_yuvtbl tbl;
+/* The same look as a joint (y,u,v) lattice, for the LiveView filter. */
+static se_yuv3   tbl3;
 static int       baked;
 static char      baked_name[SE_STOCK_NAME];
 
@@ -111,6 +113,9 @@ int fs_yuvlook_bake(const char *stock_path, int strength)
     se_look_from_stock(&st, 1, &lk);
     se_look_set_strength(&lk, strength);
     se_look_bake_yuv(&lk, &tbl);
+    /* The LiveView filter shows the same look through the joint lattice, so
+     * the panel and the file cannot disagree about which stock is loaded. */
+    se_look_bake_yuv3(&lk, &tbl3);
 
     snprintf(baked_name, sizeof baked_name, "%s", st.name);
     baked = 1;
@@ -123,6 +128,9 @@ const char *fs_yuvlook_name(void) { return baked ? baked_name : ""; }
 /* The baked tables, for host tools that plot or compare them. The camera path
  * never needs this -- it only ever calls fs_yuvlook_apply(). */
 const se_yuvtbl *fs_yuvlook_table(void) { return baked ? &tbl : NULL; }
+
+/* The same look as a joint (y,u,v) lattice. NULL until a bake succeeds. */
+const se_yuv3 *fs_yuvlook_uv3(void) { return baked ? &tbl3 : NULL; }
 
 /*
  * Apply to a UYVY frame in place.

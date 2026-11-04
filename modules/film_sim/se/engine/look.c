@@ -582,8 +582,59 @@ void se_look_bake_yuv(const se_look *lk, se_yuvtbl *t)
     }
 }
 
-/* ------------------------------------------------------- the run ----- */
+/*
+ * Flatten the look into a joint (y,u,v) lattice plus a tone curve.
+ *
+ * The lattice is filled by running grade_px(), exactly as se_look_bake_yuv
+ * does, so it is the develop sampled rather than an approximation of it. The
+ * difference is the sampling grid: this one keeps luma as a third axis, which
+ * is what lets chroma change with luma AND hue at the same time.
+ */
+static int div_round(int num, int den)
+{
+    return num >= 0 ? (num + den / 2) / den : -((-num + den / 2) / den);
+}
 
+static int clamp_c(int v) { return v < -128 ? -128 : (v > 127 ? 127 : v); }
+
+void se_look_bake_yuv3(const se_look *lk, se_yuv3 *t)
+{
+    const int NY = SE_YUV3_NY, NC = SE_YUV3_NC;
+    int iy, iu, iv, y;
+
+    for (y = 0; y < 256; y++) {
+        int o[3];
+        grade_px(lk, y, y, y, o);
+        t->y[y] = (uint8_t)clamp8(luma8(o[0], o[1], o[2]));
+    }
+
+    for (iv = 0; iv < NC; iv++)
+    for (iu = 0; iu < NC; iu++)
+    for (iy = 0; iy < NY; iy++) {
+        int yy = iy * 255 / (NY - 1);
+        int u  = -128 + iu * 255 / (NC - 1);
+        int vv = -128 + iv * 255 / (NC - 1);
+        int r, g, b, o[3], y2;
+        /* y innermost, so this MUST match fs_core_process_rows3's strides */
+        size_t k = (((size_t)iv * NC + (size_t)iu) * NY + (size_t)iy) * 3;
+
+        ycc_px(yy, u, vv, &r, &g, &b);
+        /*
+         * A node outside the RGB cube is not a colour the panel can show, but
+         * it still takes part in the interpolation of nodes that are. Clamp it
+         * into the cube and grade that, so a boundary node carries a nearby
+         * real result instead of an identity that would pull the edge toward
+         * grey.
+         */
+        grade_px(lk, clamp8(r), clamp8(g), clamp8(b), o);
+        y2 = luma8(o[0], o[1], o[2]);
+        t->v[k]     = (int16_t)(y2 - t->y[yy]);   /* vs grey of the same luma */
+        t->v[k + 1] = (int16_t)clamp_c(div_round((o[2] - y2) * 256, 454));
+        t->v[k + 2] = (int16_t)clamp_c(div_round((o[0] - y2) * 256, 359));
+    }
+}
+
+/* ------------------------------------------------------- the run ----- */
 struct se_look_run {
   se_look lk;
   int w;

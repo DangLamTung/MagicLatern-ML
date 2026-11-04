@@ -809,8 +809,11 @@ static int decode_rows(void *ctx, const unsigned char *rgb, int nrows, int width
  * file is read straight into the buffer se_lut3_apply_row() indexes, so there is
  * one allocation and no second copy. Peak memory is the cube alone.
  *
- * Applied to the decoded rows before the look, in both develop paths, so a
- * camera-profile cube sees the sRGB input it was made for.
+ * Applied to the decoded rows before the look, in every develop path, so a
+ * camera-profile cube sees the sRGB input it was made for. That was NOT true
+ * until the full-RAW and mRAW paths were given the cube: they passed NULL and
+ * ran only the look, so a cube-carrying stock developed one way through the
+ * LJPEG path and another through the sensor path.
  */
 static char     lut_path[64];
 static se_lut3  lut_cube;
@@ -1477,6 +1480,7 @@ static se_err se_cam_develop_mraw(struct dev *d, const se_cr2_info *info,
     se_jpeg     enc;
     se_jpeg_exif ex;
     se_lut1    *encode;
+    const se_lut3 *cube = lut_get();   /* NULL when the stock carries none   */
     uint16_t   *band  = NULL;  /* `bands` whole rows, being assembled       */
     uint16_t   *rd    = NULL;  /* one band block, straight off the spool    */
     uint16_t   *row16 = NULL;  /* camera RGB, then sRGB, for one row        */
@@ -1654,6 +1658,8 @@ static se_err se_cam_develop_mraw(struct dev *d, const se_cr2_info *info,
                 }
             }
             se_develop_encode_row(&col, encode, row16, W);
+            /* same order as pipeline.c: cube between encode and dither */
+            if (cube) se_lut3_apply_row(cube, row16, W);
             se_develop_dither_row(row16, row8, W, y0 + g, 1);
             if (se_look_rows(run, row8, 1, look_emit, d) != SE_OK) {
                 e = SE_E_IO;
@@ -1842,8 +1848,17 @@ se_err se_cam_develop_raw(const char *cr2_path, const char *stock_path,
     src.read_rows = spool_read_rows;
     src.ctx = &sp;
 
-    e = se_develop(&info, &src, NULL, &opts, &ar2, NULL, NULL);
+    /*
+     * `lut_get()`, not NULL. This path passed NULL, so a stock carrying a
+     * cube developed WITHOUT it while the LJPEG path and se_cam_grade_jpeg
+     * both applied it -- the same stock came out two different ways
+     * depending on which develop ran. The cube sits between the encode and
+     * the look here, which is where pipeline.c applies it and what the
+     * sRGB domain a .cube is exported for expects.
+     */
+    e = se_develop(&info, &src, lut_get(), &opts, &ar2, NULL, NULL);
     if (e != SE_OK) goto done;
+    se_log("develop_raw: cube %s", lut_get() ? "applied" : "none for this stock");
 
     se_look_end(run, look_emit, &d);
     d.run = NULL;

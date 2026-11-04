@@ -2454,6 +2454,10 @@ static volatile int fs_gui_active = 0;
 /* Redraw request. The key handler only raises this; the shelf task owns the
  * drawing, so the screen is never written from two contexts at once. */
 static volatile int fs_gui_dirty = 0;
+/* Which band moved. Cheaper than the whole screen, and set by the two things
+ * that animate on their own: the spring and the header sheen. */
+static int fs_strip_dirty = 0;
+static int fs_header_dirty = 0;
 static int fs_gui_logged = 0;
 static volatile int fs_darkroom_active = 0;
 static volatile int fs_darkroom_dirty = 0;
@@ -3217,16 +3221,22 @@ static void fs_picture_sync(void) {
  * from ML's shadows and would otherwise wipe them. */
 static void fs_picture_palette(const int *slots) {
   /* Programming 170 overlay entries is 340 ENGIO writes; doing that on every
-   * redraw (14 times a second) is pointless churn on a bus Canon also uses.
-   * Program once per stock, then refresh every 8th frame in case Canon has
-   * restored its own palette underneath us. */
+   * redraw is pointless churn on a bus Canon also uses. Program once per
+   * stock, then refresh periodically in case Canon has restored its own
+   * palette underneath us.
+   *
+   * That refresh used to be "every 8th call", which tied it to the redraw
+   * rate: band repaints make the shelf call this more often, so it would have
+   * increased the ENGIO traffic for nothing. A fixed 250 ms does not depend on
+   * how often the screen is painted. */
   static int last_code;
-  static unsigned calls;
+  static uint32_t last_ms;
   int code = fs_last_pic_idx;
 
-  if (code == last_code && (calls++ & 7) != 0)
+  if (code == last_code && get_ms_clock() - last_ms < 250)
     return;
   last_code = code;
+  last_ms = get_ms_clock();
 
   if (fsg_can_ready())
     fsg_can_reprogram();
@@ -3291,7 +3301,57 @@ static void fs_bmp_probe(const char *tag) {
  * instead of a clean one.
  */
 
+/* What the last second of painting cost, so the log can say it. */
+static uint32_t fs_paint_ms = 0;
+static int fs_paint_rows_drawn = 0;
+static int fs_paint_frames = 0;
+static uint32_t fs_paint_since = 0;
+
+/* The part of the bitmap buffer that bmp_idle_copy(direction, 0) moves, and the
+ * same numbers it uses: 720 bytes of each 960-byte row, 480 rows. */
+#define FS_BMP_W 720
+#define FS_BMP_H 480
+
+/*
+ * Copy rows y0..y1-1 between the live and the idle bitmap buffer.
+ *
+ * bmp_idle_copy(direction, 0) copies the whole screen -- 691,200 bytes -- and
+ * the shelf called it twice for every animation frame in order to move a strip
+ * that occupies 94 rows. This is that copy restricted to the rows that
+ * changed; BMPPITCH (960 here) is the row stride of the real VRAM, and
+ * bmp_vram_real() already points at the visible origin, which is why the row
+ * length is FS_BMP_W and not the pitch.
+ */
+
+static void fs_blit_rows(int direction, int y0, int y1) {
+  uint8_t *real = bmp_vram_real();
+  uint8_t *idle = bmp_vram_idle();
+  int w = os.x_max;
+  int y;
+
+  if (!real || !idle)
+    return;
+  if (w <= 0 || w > FS_BMP_W)
+    w = FS_BMP_W;
+  if (y0 < 0)
+    y0 = 0;
+  if (y1 > FS_BMP_H)
+    y1 = FS_BMP_H;
+  for (y = y0; y < y1; y++) {
+    uint8_t *d = (direction ? real : idle) + (size_t)y * BMPPITCH;
+    const uint8_t *s = (direction ? idle : real) + (size_t)y * BMPPITCH;
+    memcpy(d, s, (size_t)w);
+  }
+}
+
+static void fs_paint_account(uint32_t ms, int rows) {
+  fs_paint_ms += ms;
+  fs_paint_rows_drawn += rows;
+  fs_paint_frames++;
+}
+
 static void fs_paint(void (*fn)(void)) {
+  uint32_t t0 = get_ms_clock();
   if (film_sim_direct) {
     BMP_LOCK(bmp_draw_to_idle(0); fn();)
   } else {
@@ -3299,13 +3359,52 @@ static void fs_paint(void (*fn)(void)) {
              bmp_draw_to_idle(0); bmp_idle_copy(1, 0);)
   }
   ml_refresh_display_needed = 1;
+  fs_paint_account(get_ms_clock() - t0, FS_BMP_H);
 }
+
+/*
+ * Paint one band: the same double-buffering as fs_paint(), over y0..y1-1 only.
+ *
+ * Only valid for a band that paints its own background -- fsg_draw_shelf_strip
+ * and fsg_draw_shelf_header do, everything else in fsg.c assumes it owns the
+ * whole screen.
+ */
+static void fs_paint_band(int y0, int y1, void (*fn)(void)) {
+  uint32_t t0 = get_ms_clock();
+  if (film_sim_direct) {
+    BMP_LOCK(bmp_draw_to_idle(0); fn();)
+  } else {
+    BMP_LOCK(fs_blit_rows(0, y0, y1); bmp_draw_to_idle(1); fn();
+             bmp_draw_to_idle(0); fs_blit_rows(1, y0, y1);)
+  }
+  ml_refresh_display_needed = 1;
+  fs_paint_account(get_ms_clock() - t0, y1 - y0);
+}
+
+/* The footer carries the LiveView status, so if that line changed the whole
+ * screen has to be redrawn -- a band repaint would leave the old text. */
+static char fs_painted_hint[32];
 
 static void fs_gui_render(void) {
   fsg_shelf_t st;
   fs_shelf_state(&st);
   fs_picture_palette(st.stock.palette);
   fsg_draw_shelf(&st);
+  snprintf(fs_painted_hint, sizeof fs_painted_hint, "%s",
+           st.hint_r ? st.hint_r : "");
+}
+
+static void fs_gui_render_strip(void) {
+  fsg_shelf_t st;
+  fs_shelf_state(&st);
+  fs_picture_palette(st.stock.palette);
+  fsg_draw_shelf_strip(&st);
+}
+
+static void fs_gui_render_header(void) {
+  fsg_shelf_t st;
+  fs_shelf_state(&st);
+  fsg_draw_shelf_header(&st);
 }
 
 /*
@@ -3502,6 +3601,10 @@ static int fs_shelf_run(void) {
    * camera would look bricked. Release it and say why in the log instead. */
   unsigned kc0 = fs_key_count;
   uint32_t t0 = get_ms_clock();
+  fs_paint_since = t0;
+  fs_paint_ms = 0;
+  fs_paint_rows_drawn = 0;
+  fs_paint_frames = 0;
 
   while (fs_gui_active) {
     /* The strip springs towards the selected stock and the header sheen moves
@@ -3516,12 +3619,16 @@ static int fs_shelf_run(void) {
       fs_anim_ms = get_ms_clock();
       /* The header sheen keeps its own, slower clock. */
       if (fs_shelf_animate(dt))
-        fs_gui_dirty = 1;
+        fs_strip_dirty = 1;
       if (get_ms_clock() - fs_sheen_ms > 260) {
         fs_sheen_ms = get_ms_clock();
         fs_anim_tick++;
-        fs_gui_dirty = 1;
+        fs_header_dirty = 1;
       }
+      /* The footer's LiveView status can change under the screen; if it did,
+       * only a full redraw will show the new text. */
+      if (strcmp(fs_lv_status(), fs_painted_hint))
+        fs_gui_dirty = 1;
     }
     if (fs_prov_tick())
       fs_gui_dirty = 1;
@@ -3536,6 +3643,8 @@ static int fs_shelf_run(void) {
     }
     if (fs_gui_dirty) {
       fs_gui_dirty = 0;
+      fs_strip_dirty = 0;
+      fs_header_dirty = 0;
       fs_picture_sync(); /* outside the lock: this one reads the card */
       fs_paint(fs_gui_render);
       if (!fs_gui_logged) {
@@ -3545,6 +3654,27 @@ static int fs_shelf_run(void) {
                (unsigned)bmp_vram_real(), bmp_is_on(), film_sim_direct);
         fs_bmp_probe("shelf");
       }
+    } else {
+      /* Only a band moved: copy and draw those rows, not the whole screen. */
+      if (fs_strip_dirty) {
+        fs_strip_dirty = 0;
+        fs_paint_band(FSG_STRIP_Y, FSG_STRIP_Y + FSG_STRIP_H, fs_gui_render_strip);
+      }
+      if (fs_header_dirty) {
+        fs_header_dirty = 0;
+        fs_paint_band(0, FSG_HEADER_H, fs_gui_render_header);
+      }
+    }
+    /* Once a second, what the painting cost -- the number the log has to carry
+     * for "the strip redraws 94 rows, not 480" to be checkable on the camera. */
+    if (fs_paint_frames && get_ms_clock() - fs_paint_since > 1000) {
+      fs_log("shelf: paint %d frames, %d ms, %d rows (full=%d rows, band=%d+%d)",
+             fs_paint_frames, (int)fs_paint_ms, fs_paint_rows_drawn,
+             FS_BMP_H, FSG_STRIP_H, FSG_HEADER_H);
+      fs_paint_ms = 0;
+      fs_paint_rows_drawn = 0;
+      fs_paint_frames = 0;
+      fs_paint_since = get_ms_clock();
     }
     if (fs_key_count == kc0 && get_ms_clock() - t0 > 20000) {
       fs_log("shelf: no key received in 20 s, releasing the screen");

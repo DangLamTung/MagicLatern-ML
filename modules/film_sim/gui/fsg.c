@@ -109,8 +109,8 @@ static void blit(int x, int y, const unsigned char *px, int w, int h);
 
 /* ---- the film strip ---------------------------------------------------- */
 
-#define STRIP_Y   352
-#define STRIP_H   94
+#define STRIP_Y   FSG_STRIP_Y
+#define STRIP_H   FSG_STRIP_H
 #define FRAME_W   96
 #define FRAME_H   66
 #define FRAME_PITCH 108
@@ -135,8 +135,12 @@ static void film_strip(const fsg_shelf_t *s)
   fsg_fill(0, STRIP_Y, FSG_W, 1, FSG_LINE);
   fsg_fill(0, STRIP_Y + STRIP_H - 1, FSG_W, 1, FSG_LINE);
 
-  /* Perforations scroll with the strip so they look attached to it. */
-  int phase = (s->tick / 3) - (s->scroll * 2) / 256;
+  /* Perforations are the film's own sprocket holes, so they move with the
+   * strip and by exactly as much: one frame of travel is FRAME_PITCH pixels.
+   * A `tick / 3` term used to be added on top, which is a pixel every 3 ms --
+   * a whole 24 px period in 72 ms. Now that the strip is only redrawn while it
+   * moves, that term would not scroll, it would jump on every repaint. */
+  int phase = -(s->scroll * FRAME_PITCH) / 256;
   perf_row(STRIP_Y + 4, phase);
   perf_row(STRIP_Y + STRIP_H - 11, phase);
 
@@ -517,6 +521,17 @@ void fsg_draw_shelf(const fsg_shelf_t *s)
 }
 
 /* ---- darkroom ---------------------------------------------------------- */
+
+void fsg_draw_shelf_header(const fsg_shelf_t *s)
+{
+  top_bar(s->title && s->title[0] ? s->title : "FILM SHELF", s->badge,
+          s->counter, s->tick);
+}
+
+void fsg_draw_shelf_strip(const fsg_shelf_t *s)
+{
+  film_strip(s);
+}
 
 void fsg_draw_develop(const fsg_dev_t *d)
 {

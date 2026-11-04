@@ -238,6 +238,21 @@ void fsg_stock_palette(const fsg_film_t *f, int out[FSG_NSLOT]);
 void fsg_draw_shelf(const fsg_shelf_t *s);
 void fsg_draw_develop(const fsg_dev_t *d);
 
+/*
+ * The two bands of the shelf that move on their own: the header sheen and the
+ * film strip. Each paints its own background, so redrawing one leaves every
+ * other row of the panel untouched -- which is what lets an animation frame
+ * copy 94 rows instead of the whole 720x480 screen.
+ *
+ * fsg_draw_shelf() is still the only thing that draws the rest.
+ */
+void fsg_draw_shelf_header(const fsg_shelf_t *s);
+void fsg_draw_shelf_strip(const fsg_shelf_t *s);
+
+#define FSG_HEADER_H 46   /* rows 0..45: the red bar and its sweep    */
+#define FSG_STRIP_Y  352  /* the strip band, self-clearing             */
+#define FSG_STRIP_H  94
+
 /* The word wrap the drawer applies to descriptions. Returns line count. */
 int fsg_wrap(const char *text, char out[][48], int max_lines, int width);
 

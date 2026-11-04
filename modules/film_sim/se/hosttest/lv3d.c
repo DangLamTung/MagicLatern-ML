@@ -191,6 +191,208 @@ static int load_stock(const char *path, se_stock *st)
     return rc == SE_OK && st->name[0] ? 0 : -1;
 }
 
+/* (Y, Cb, Cr) -> RGB, the frame's own integer conversion. */
+static void ycc_to_rgb(int y, int u, int v, unsigned char *o)
+{
+    o[0] = clamp8(y + ((359 * v) >> 8));
+    o[1] = clamp8(y - ((88 * u + 183 * v) >> 8));
+    o[2] = clamp8(y + ((454 * u) >> 8));
+}
+
+/* Run the look over npix pixels that are not a frame (bake probes). */
+static int run_look_rgb(const se_look *lk, const unsigned char *in,
+                        unsigned char *out, int npix)
+{
+    static unsigned char buf[70000 * 3];
+    if (npix > 70000) return -1;
+    memcpy(buf, in, (size_t)npix * 3);
+    return develop((se_look *)lk, buf, out, npix, 1);
+}
+
+/* ======================================================================
+ * The Cb/Cr factor array, parameterised.
+ *
+ * This is the structure the shot table already has -- a 32x32 map of chroma
+ * factors measured at one reference luma, times a scalar gain per luma -- but
+ * with the map size and a luma-band count exposed, so the question "would a
+ * bigger factor array, or a banded one, close the gap to the joint lattice"
+ * can be answered instead of argued.
+ *
+ * bands = 1 is the classic factor array. A banded variant (each luma band with
+ * its own map) was implemented and abandoned: normalising each band's gain to
+ * its own centre luma blows up in the dark bands, where the ring used to
+ * measure gain carries almost no chroma, and the banded runs measured WORSE
+ * than the single map (dCb 2.9 against 0.88). That is a fault in this model,
+ * not a property of banding, so no banded number is reported here.
+ * ====================================================================== */
+#define M2_N_MAX 128
+#define M2_B_MAX 8
+
+typedef struct {
+    int N, B;
+    short map[M2_B_MAX][M2_N_MAX * M2_N_MAX * 3];   /* dy, Cb, Cr */
+    unsigned char y[256];
+    int gain[256];          /* Q6: 64 at the reference luma of its band */
+    int uo[256], vo[256];
+} m2_t;
+
+static m2_t m2;
+
+static int band_of(int y) { return y * m2.B / 256; }
+static int band_centre(int b) { return (b * 256 + 128) / m2.B; }
+
+static int bake_m2(const se_look *lk, int N, int B)
+{
+    static unsigned char in[70000 * 3], out[70000 * 3];
+    int np = 0, y, b, iu, iv, a;
+    int idx_neutral, idx_ring, idx_map;
+
+    if (N < 2 || N > M2_N_MAX || B < 1 || B > M2_B_MAX) return -1;
+    m2.N = N; m2.B = B;
+
+    /* every probe this model needs, in one row so the look runs once */
+    idx_neutral = np;
+    for (y = 0; y < 256; y++) {
+        in[np * 3 + 0] = (unsigned char)y;
+        in[np * 3 + 1] = (unsigned char)y;
+        in[np * 3 + 2] = (unsigned char)y;
+        np++;
+    }
+    idx_ring = np;
+    for (y = 0; y < 256; y++)
+        for (a = 0; a < 8; a++) {
+            int u = (int)(40.0 * 0.7071 * (a & 1 ? 1 : -1) * (a & 2 ? 0.5 : 1));
+            int v = (int)(40.0 * 0.7071 * (a & 4 ? 1 : -1) * (a & 4 ? 1 : 0.5));
+            unsigned char px[3];
+            ycc_to_rgb(y, u, v, px);
+            in[np * 3 + 0] = px[0]; in[np * 3 + 1] = px[1]; in[np * 3 + 2] = px[2];
+            np++;
+        }
+    idx_map = np;
+    for (b = 0; b < B; b++)
+        for (iv = 0; iv < N; iv++)
+            for (iu = 0; iu < N; iu++) {
+                int u  = -128 + iu * 255 / (N - 1);
+                int vv = -128 + iv * 255 / (N - 1);
+                unsigned char px[3];
+                ycc_to_rgb(band_centre(b), u, vv, px);
+                in[np * 3 + 0] = px[0]; in[np * 3 + 1] = px[1]; in[np * 3 + 2] = px[2];
+                np++;
+            }
+    if (np > 70000) return -1;
+    if (run_look_rgb(lk, in, out, np) != 0) return -1;
+
+    /* tone curve and neutral cast */
+    for (y = 0; y < 256; y++) {
+        int Y, U, V;
+        rgb_to_ycc(out + (size_t)(idx_neutral + y) * 3, &Y, &U, &V);
+        m2.y[y] = (unsigned char)Y;
+        m2.uo[y] = U;
+        m2.vo[y] = V;
+    }
+
+    /* one scalar gain per luma: how much chroma survives, averaged over the
+     * ring, relative to that band's reference luma */
+    for (y = 0; y < 256; y++) {
+        int k, sy = 0, sn = 0;
+        for (k = 0; k < 8; k++) {
+            const unsigned char *g = out + (size_t)(idx_ring + y * 8 + k) * 3;
+            int Y, U, V;
+            rgb_to_ycc(g, &Y, &U, &V);
+            sy += (U < 0 ? -U : U) + (V < 0 ? -V : V);
+            sn += 64;      /* the ring radius, |u|+|v| of the probe (approx) */
+        }
+        m2.gain[y] = sn ? (sy * 64 + sn / 2) / sn : 64;
+        if (m2.gain[y] < 1) m2.gain[y] = 1;
+    }
+    /* normalise each band so its centre luma has gain 64 */
+    for (b = 0; b < B; b++) {
+        int ref = m2.gain[band_centre(b)];
+        if (ref < 1) ref = 1;
+        for (y = b * 256 / B; y < (b + 1) * 256 / B && y < 256; y++)
+            m2.gain[y] = m2.gain[y] * 64 / ref;
+    }
+
+    /* the map itself, in frame units, with the neutral cast removed */
+    np = idx_map;
+    for (b = 0; b < B; b++)
+        for (iv = 0; iv < N; iv++)
+            for (iu = 0; iu < N; iu++) {
+                int Y, U, V;
+                size_t k = ((size_t)b * N * N + (size_t)iv * N + iu) * 3;
+                rgb_to_ycc(out + (size_t)np * 3, &Y, &U, &V);
+                /* dy: what this colour does to luma, vs grey of the same
+                 * luma. Without it a factor array cannot move brightness by
+                 * hue, and CLASSIC CHROME stays 3.35 levels out on luma
+                 * however fine the (Cb,Cr) map gets. */
+                m2.map[b][k]     = (short)(Y - m2.y[band_centre(b)]);
+                m2.map[b][k + 1] = (short)(U - m2.uo[band_centre(b)]);
+                m2.map[b][k + 2] = (short)(V - m2.vo[band_centre(b)]);
+                np++;
+            }
+    return 0;
+}
+
+static void apply_m2(const void *src, void *dst, int pitch, int row0, int row1, int interp)
+{
+    const int N = m2.N;
+    int words = pitch >> 2;
+    const unsigned int *sp = (const unsigned int *)src + (unsigned int)row0 * words;
+    unsigned int *dp = (unsigned int *)dst + (unsigned int)row0 * words;
+
+    for (int y = row0; y < row1; y++) {
+        for (int i = 0; i < words; i++) {
+            unsigned int px = sp[i];
+            int u  = (signed char)px;
+            int ya = (px >> 8) & 0xFF;
+            int vv = (signed char)(px >> 16);
+            int yb = (px >> 24) & 0xFF;
+            int ym = (ya + yb) >> 1;
+            int b  = band_of(ym);
+            int tu = (u + 128) * 65536 * (N - 1) / 255;
+            int tv = (vv + 128) * 65536 * (N - 1) / 255;
+            int iu = tu >> 16, iv = tv >> 16;
+            int fu = (tu >> 8) & 0xFF, fv = (tv >> 8) & 0xFF;
+            int nu, nv, dy = 0;
+            const short *base;
+
+            if (iu > N - 2) { iu = N - 2; fu = 256; }
+            if (iv > N - 2) { iv = N - 2; fv = 256; }
+            base = m2.map[b] + ((size_t)iv * N + iu) * 3;
+            if (!interp) {                      /* nearest cell, no blend */
+                dy = base[0];
+                nu = base[1];
+                nv = base[2];
+                goto have;
+            }
+            {
+                int c;
+                for (c = 0; c < 3; c++) {
+                    int c0 = base[c],            c1 = base[c + 3];
+                    int c2 = base[N * 3 + c],    c3 = base[N * 3 + c + 3];
+                    int a2 = c0 + (((c1 - c0) * fu) >> 8);
+                    int b2 = c2 + (((c3 - c2) * fu) >> 8);
+                    int r2 = a2 + (((b2 - a2) * fv) >> 8);
+                    if (c == 0) dy = r2; else if (c == 1) nu = r2; else nv = r2;
+                }
+            }
+            goto have2;
+            (void)0;
+        have:
+            fu = fv = 0;
+        have2:
+            nu = m2.uo[ym] + nu * m2.gain[ym] / 64;
+            nv = m2.vo[ym] + nv * m2.gain[ym] / 64;
+            dp[i] = ((unsigned int)(unsigned char)(signed char)fs_clamp_i(nu, -128, 127))
+                  | ((unsigned int)fs_clamp_i(m2.y[ya] + dy, 0, 255) << 8)
+                  | ((unsigned int)(unsigned char)(signed char)fs_clamp_i(nv, -128, 127) << 16)
+                  | ((unsigned int)fs_clamp_i(m2.y[yb] + dy, 0, 255) << 24);
+        }
+        sp += words;
+        dp += words;
+    }
+}
+
 #define PASSES 40
 
 int main(int argc, char **argv)
@@ -305,5 +507,35 @@ int main(int argc, char **argv)
     printf("  lattice / preset: %.2fx\n", t_lat / t_preset);
     if (t_shot < 1e9)
         printf("  %-30s %7.2f ms/frame\n", "separable shot tables", t_shot);
+
+    /* --- the Cb/Cr factor array, at several sizes and band counts ---- */
+    {
+        static const int cfg[][3] = { {32,1,1}, {64,1,1}, {128,1,1},
+                                      {32,1,0}, {64,1,0}, {128,1,0} };
+        /* B is always 1; see the note on the banded variant above. */
+        printf("%dx%d panel, %s + %s\n", PIX, H, argv[1], st.name);
+        printf("\nCb/Cr factor array vs the joint lattice (same frame, same truth)\n");
+        for (unsigned ci = 0; ci < sizeof cfg / sizeof cfg[0]; ci++) {
+            stat s2 = {0};
+            double best = 1e9;
+            int N = cfg[ci][0], B = cfg[ci][1], ip = cfg[ci][2];
+            if (bake_m2(&lk, N, B) != 0) { printf("  %dx%d/%d band(s): bake failed\n", N, N, B); continue; }
+            for (pass = 0; pass < PASSES; pass++) {
+                double t0, dt;
+                memcpy(work, plane, sizeof work);
+                t0 = now_ms();
+                apply_m2(work, work, PITCH, 0, H, ip);
+                dt = now_ms() - t0;
+                if (dt < best) best = dt;
+            }
+            score(work, &s2);
+            printf("  %3dx%-3d map, %s, %6d B  ", N, N, ip ? "bilinear" : "nearest ",
+                   N * N * 3 * 2 * B + 256 + 1024 + 2048);
+            printf("mean %5.2f  [dY %4.2f dCb %4.2f dCr %4.2f]  %5.2f ms  %.2fx\n",
+                   s2.sum / (double)s2.n, s2.sy / (double)s2.n, s2.scb / (double)s2.n,
+                   s2.scr / (double)s2.n, best, best / t_preset);
+        }
+    }
+
     return 0;
 }

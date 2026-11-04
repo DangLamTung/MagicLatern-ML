@@ -6481,9 +6481,9 @@ static struct menu_entry film_sim_menu[] = {
         .priv = &film_sim_lv3d,
         .max = 1,
         .help = "Grade the preview through a joint (y,u,v) lattice baked from "
-                "the stock instead of the preset tables: 4.1 levels off the "
-                "develop against 7.0, with 7x less chroma error (host test "
-                "se/hosttest/lv3d.c). Costs about 3.5x the table lookups, so "
+                "the stock instead of the preset tables: 3.3 levels off the "
+                "develop against 8.8, with 5x less chroma error (host test "
+                "se/hosttest/lv3d.c). Costs about 3.3x the table lookups, so "
                 "watch FILMSIM.LOG's grade_ms before leaving it on.",
     },
     {

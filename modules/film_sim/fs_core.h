@@ -403,7 +403,7 @@ static void fs_core_process_rows(const fs_lut_t *lut, const void *src, void *dst
  * se_look_bake_yuv3() fills, so each 8-node cell is 16 contiguous bytes.
  * ====================================================================== */
 #ifndef FS_UV3_NY
-#define FS_UV3_NY 8                    /* must match SE_YUV3_NY in look.h  */
+#define FS_UV3_NY 12                   /* must match SE_YUV3_NY in look.h  */
 #endif
 #ifndef FS_UV3_NC
 #define FS_UV3_NC 17                   /* must match SE_YUV3_NC in look.h  */

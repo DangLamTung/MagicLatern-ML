@@ -212,7 +212,7 @@ void se_look_bake_yuv(const se_look *lk, se_yuvtbl *t);
  * same node count per axis (se/hosttest/lv3d.c).
  */
 #ifndef SE_YUV3_NY
-#define SE_YUV3_NY 8                       /* nodes along luma              */
+#define SE_YUV3_NY 12                      /* nodes along luma              */
 #endif
 #ifndef SE_YUV3_NC
 #define SE_YUV3_NC 17                      /* nodes along Cb, and along Cr  */

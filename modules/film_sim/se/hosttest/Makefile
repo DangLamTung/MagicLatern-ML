@@ -44,6 +44,14 @@ lvgrade: lvgrade.c $(SE_DIR)/se_libgcc.c $(SE_DIR)/../fs_yuvlook.c $(ENG_SRC) st
 
 # tableerr: how far the shot-time tables fall from the full grade, by luma
 # and by chroma. Answers "what does the separable form lose" with numbers.
+# lutchk: does an exported cube still hold the recipe it came from?
+lutchk: lutchk.c $(SE_DIR)/se_libgcc.c $(ENG_SRC) stubs.c
+	$(CC) $(CFLAGS) $(CPPFLAGS) -o $@ $^ $(LDLIBS)
+
+# fs2cube: a .fs exported as a 3D .cube, for handing a look to anything else.
+fs2cube: fs2cube.c $(SE_DIR)/se_libgcc.c $(ENG_SRC) stubs.c
+	$(CC) $(CFLAGS) $(CPPFLAGS) -o $@ $^ $(LDLIBS)
+
 # springtest: the shelf's spring, at the loop's real rate. No engine needed.
 springtest: springtest.c
 	$(CC) $(CFLAGS) -o $@ $^
@@ -85,7 +93,7 @@ match: lookmatch
 	./lookmatch "$(CR2)" "$(STOCK)"
 
 clean:
-	rm -f $(BIN) lookmatch rawdev grade_jpeg lvgrade tabledump tableerr bench_grade springtest
+	rm -f $(BIN) lookmatch rawdev grade_jpeg lvgrade tabledump tableerr bench_grade springtest fs2cube lutchk
 
 .PHONY: all check match clean
 

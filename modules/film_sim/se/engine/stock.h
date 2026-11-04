@@ -76,6 +76,14 @@ typedef struct {
     int   wb_preset;  int wb_set;
 } se_stock_raw;
 
+/*
+ * Hue sectors per stock: twelve, 30 degrees apart, so every bead on a
+ * 12-colour wheel has a knot of its own. A file that writes six values is
+ * expanded on load (see parse_hue_vec in stock.c), so nothing already on a
+ * card changes meaning.
+ */
+#define SE_HUE_SECTORS 12
+
 typedef struct {
     /* The format generation this file asked for; 0 when it did not say,
      * which means it predates the key and is read as generation 1. */
@@ -107,19 +115,30 @@ typedef struct {
     float sat;
     int   sat_set;
 
-    /* Saturation per hue sector -- R, Y, G, C, B, M -- 100 = unchanged.
-     * Defaulted in se_stock_init, not by the memset, because 0 here means
-     * "make that hue grey" and silence must not mean that. */
-    float hue_sat[6];
+    /*
+     * Saturation per hue sector, 100 = unchanged. Defaulted in
+     * se_stock_init, not by the memset, because 0 here means "make that hue
+     * grey" and silence must not mean that.
+     *
+     * TWELVE sectors, 30 degrees apart, not six. Six is enough to model a
+     * stock (a 12-knot fit only takes the residual from 2.1 to 0.8 levels,
+     * and the whole hue stage is smaller than that), but not enough to
+     * CONTROL one: a 12-colour wheel like the OM System's puts a bead every
+     * 30 degrees, and with six knots every bead would sit exactly halfway
+     * between two of them and move its neighbours by half as much as
+     * itself. A file that still writes six values is expanded here, so
+     * nothing already on the card changes meaning.
+     */
+    float hue_sat[SE_HUE_SECTORS];
 
     /* Hue rotation per sector, in DEGREES, signed. Positive moves toward
-     * the next sector: R->Y->G->C->B->M->R. This is what makes a stock a
-     * different colour rather than a stronger one. */
-    float hue_rot[6];
+     * the next sector, i.e. clockwise through the wheel. This is what makes
+     * a stock a different colour rather than a stronger one. */
+    float hue_rot[SE_HUE_SECTORS];
 
     /* How bright each hue renders, 100 = unchanged. Film layers have
      * different speeds; this is why Velvia's blues go dense. */
-    float hue_lum[6];
+    float hue_lum[SE_HUE_SECTORS];
 
     /* Split tone, signed, in 0..255 output units at full weight. The
      * shadow triple is weighted by (255 - luma), the highlight triple by

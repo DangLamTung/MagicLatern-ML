@@ -86,6 +86,9 @@ typedef struct {
      * Saturation per hue sector: R, Y, G, C, B, M, 256 = unchanged,
      * interpolated between neighbours so nothing bands at a boundary.
      *
+     * SE_HUE_SECTORS of them (twelve, 30 degrees apart), 256 = unchanged,
+     * interpolated between neighbours so nothing bands at a boundary.
+     *
      * This is the control that separates a film simulation from a tint.
      * Classic Chrome's whole character is dull greens and yellows over
      * reds that keep their punch; Eterna drains everything except what is
@@ -94,11 +97,11 @@ typedef struct {
      * curves cannot either, because a curve on R does not know what G and
      * B are doing at that pixel.
      */
-    int      hue_sat[6];
+    int      hue_sat[SE_HUE_SECTORS];
 
     /*
      * Hue rotation per sector, in 1536ths of a turn, signed. Positive
-     * moves toward the next sector: R->Y->G->C->B->M->R.
+     * moves toward the next sector, clockwise through the wheel.
      *
      * This is the control that stops a stock reading as a filter laid
      * over the picture. Velvia does not merely saturate a green -- it
@@ -107,7 +110,7 @@ typedef struct {
      * stronger ones, and no amount of saturation or curve will produce
      * them.
      */
-    int      hue_rot[6];
+    int      hue_rot[SE_HUE_SECTORS];
 
     /*
      * Luminance per sector, 256 = unchanged.
@@ -118,7 +121,7 @@ typedef struct {
      * why its shadows look the way they do. Classic Chrome's greens sit
      * down in the frame for the same reason.
      */
-    int      hue_lum[6];
+    int      hue_lum[SE_HUE_SECTORS];
 
     int      hue_any;        /* 0 when nothing per-hue is set: skip it all */
 

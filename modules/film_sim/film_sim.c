@@ -919,11 +919,14 @@ static void fs_sync() {
   /* Bit fields, not decimal weights: stock*100000000 overflows int32 for the
    * 33-stock list, and a wrapped signature means the look stops updating. */
   int preset_now = fs_lv_preset();
+  /* The stock field is 7 bits, not 6: importing M-Film's catalogue takes the
+   * shelf past 63, and `stock & 0x3F` made stock 64 look like stock 0, so
+   * selecting it changed nothing. */
   unsigned int sig =
       ((unsigned)preset_now & 0x0F) << 28 |
-      ((unsigned)fs_clamp_i(film_sim_stock, 0, 63) & 0x3F) << 22 |
-      ((unsigned)fs_clamp_i(film_sim_strength, 0, 100) & 0x7F) << 15 |
-      ((unsigned)fs_clamp_i(film_sim_grain, 0, 100) & 0x7F) << 8 |
+      ((unsigned)fs_clamp_i(film_sim_stock, 0, MAX_DYNAMIC_FILMS - 1) & 0x7F) << 21 |
+      ((unsigned)fs_clamp_i(film_sim_strength, 0, 100) & 0x7F) << 14 |
+      ((unsigned)fs_clamp_i(film_sim_grain, 0, 100) & 0x7F) << 7 |
       ((unsigned)fs_clamp_i(film_sim_enable, 0, 1) & 1);
   /* Saturation gets its own word: the first signature has no spare bits and a
    * wrapped signature is worse than a second compare. */
@@ -957,9 +960,35 @@ static void fs_sync() {
   }
   /* Framing is an aspect mode: the hook needs it even when nothing else moved. */
   fs_yuvhook_bars(film_sim_aspect);
-  /* An external cube is read once, at the first develop; turning it off must
-   * release it and turning it on must pick up a file that changed. */
-  se_cam_lut_path(film_sim_lut ? "ML/FILMSIM/LOOK.BIN" : NULL);
+  /*
+   * Which 3D LUT the develop uses.
+   *
+   * A stock may carry its own: the <lut> tag in its ML/FILMS XML, which is
+   * the imported stocks keep their colour (tools/mfilm_import.py). It is part
+   * of the stock's definition, not a session option, so it is used whether or
+   * not film.sim.lut is on -- those recipes are flat by design and would come
+   * out grey without it.
+   *
+   * Otherwise the session-wide ML/FILMSIM/LOOK.BIN, still behind its switch:
+   * it is read once at the first develop, turning it off releases it, and
+   * turning it on again picks up a file that changed. A missing file is
+   * logged by the loader, which then develops without it.
+   */
+  {
+    const char *own = NULL;
+    if (film_active_count > 0) {
+      int idx = fs_clamp_i(film_sim_stock, 0, film_active_count - 1);
+      const char *p = film_active_table[idx].lut;
+      /* A string test, not a file test: fs_sync also runs from the stock menu
+       * handler, and this module does no card I/O in a key handler. Stocks
+       * that came with the module name ML/DATA/<CODE>.CUB, which does not
+       * exist, so only the imported ones -- always under this prefix -- take
+       * this path and the rest keep the global LOOK.BIN. */
+      if (p && !strncmp(p, "ML/FILMSIM/LUT/", 15))
+        own = p;
+    }
+    se_cam_lut_path(own ? own : (film_sim_lut ? "ML/FILMSIM/LOOK.BIN" : NULL));
+  }
 }
 
 /*

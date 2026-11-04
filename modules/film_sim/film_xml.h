@@ -14,7 +14,13 @@
 #include <fio-ml.h>
 #include "../film_table.h"
 
-#define MAX_DYNAMIC_FILMS 64
+/* The shelf can hold this many stocks: one entry per XML in ML/FILMS/.
+ * It was 64 while the only definitions were the 33 compiled in; importing
+ * M-Film's catalogue (tools/mfilm_import.py) took the card to 84, and going
+ * past this limit drops the extras silently. film_active_table is one static
+ * array, about 300 bytes per entry, so 96 costs ~29 KB of module BSS and
+ * nothing per frame. */
+#define MAX_DYNAMIC_FILMS 96
 #define FILM_DIR "ML/FILMS"
 
 typedef struct

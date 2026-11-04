@@ -3344,6 +3344,8 @@ static void fs_blit_rows(int direction, int y0, int y1) {
   }
 }
 
+/* rows = rows COPIED between the two buffers; in direct mode there are none,
+ * and the log is evidence, so it must not claim copies that did not happen. */
 static void fs_paint_account(uint32_t ms, int rows) {
   fs_paint_ms += ms;
   fs_paint_rows_drawn += rows;
@@ -3359,7 +3361,7 @@ static void fs_paint(void (*fn)(void)) {
              bmp_draw_to_idle(0); bmp_idle_copy(1, 0);)
   }
   ml_refresh_display_needed = 1;
-  fs_paint_account(get_ms_clock() - t0, FS_BMP_H);
+  fs_paint_account(get_ms_clock() - t0, film_sim_direct ? 0 : FS_BMP_H);
 }
 
 /*
@@ -3378,7 +3380,7 @@ static void fs_paint_band(int y0, int y1, void (*fn)(void)) {
              bmp_draw_to_idle(0); fs_blit_rows(1, y0, y1);)
   }
   ml_refresh_display_needed = 1;
-  fs_paint_account(get_ms_clock() - t0, y1 - y0);
+  fs_paint_account(get_ms_clock() - t0, film_sim_direct ? 0 : (y1 - y0));
 }
 
 /* The footer carries the LiveView status, so if that line changed the whole

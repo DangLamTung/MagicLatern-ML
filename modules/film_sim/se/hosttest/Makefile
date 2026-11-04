@@ -27,7 +27,7 @@ BIN = se_cam_test
 ENG_SRC  = $(wildcard $(ENGINE)/*.c)
 LOOK_SRC = lookmatch.c $(SE_DIR)/se_libgcc.c $(SE_DIR)/../fs_yuvlook.c $(ENG_SRC)
 
-all: $(BIN) lookmatch grade_jpeg rawdev lvgrade
+all: $(BIN) lookmatch grade_jpeg rawdev lvgrade tabledump
 
 # The develop colour path applied to a plain JPEG, for evaluating recipes on
 # real photographs when no raw file is at hand.
@@ -35,6 +35,10 @@ rawdev: rawdev.c $(SE_DIR)/se_cam.c $(SE_DIR)/se_libgcc.c $(ENG_SRC) stubs.c
 	$(CC) $(CFLAGS) $(CPPFLAGS) -o $@ $^ $(LDLIBS)
 
 # lvgrade: the shot-time look applied to a LiveView buffer the camera dumped.
+# tabledump: the tables a recipe bakes into, as text, for plotting.
+tabledump: tabledump.c $(SE_DIR)/se_libgcc.c $(SE_DIR)/../fs_yuvlook.c $(ENG_SRC) stubs.c
+	$(CC) $(CFLAGS) $(CPPFLAGS) -o $@ $^ $(LDLIBS)
+
 lvgrade: lvgrade.c $(SE_DIR)/se_libgcc.c $(SE_DIR)/../fs_yuvlook.c $(ENG_SRC) stubs.c
 	$(CC) $(CFLAGS) $(CPPFLAGS) -o $@ $^ $(LDLIBS)
 

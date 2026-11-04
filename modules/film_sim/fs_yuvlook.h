@@ -14,6 +14,11 @@ int  fs_yuvlook_bake(const char *stock_path, int strength);
 int  fs_yuvlook_ready(void);
 const char *fs_yuvlook_name(void);
 
+/* The baked tables, for host tools that plot them. se_yuvtbl lives in
+ * engine/look.h, which a caller includes first when it wants the contents. */
+#include "se/engine/look.h"
+const se_yuvtbl *fs_yuvlook_table(void);
+
 /* Millisecs spent, 0 when nothing was done. */
 uint32_t fs_yuvlook_apply(unsigned char *buf, int width, int height, int stride);
 

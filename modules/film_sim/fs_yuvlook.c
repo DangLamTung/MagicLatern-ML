@@ -120,6 +120,10 @@ int fs_yuvlook_bake(const char *stock_path, int strength)
 int fs_yuvlook_ready(void) { return baked; }
 const char *fs_yuvlook_name(void) { return baked ? baked_name : ""; }
 
+/* The baked tables, for host tools that plot or compare them. The camera path
+ * never needs this -- it only ever calls fs_yuvlook_apply(). */
+const se_yuvtbl *fs_yuvlook_table(void) { return baked ? &tbl : NULL; }
+
 /*
  * Apply to a UYVY frame in place.
  *

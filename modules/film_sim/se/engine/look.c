@@ -428,6 +428,29 @@ static void grade_row(const se_look *lk, uint8_t *row, int w);
  * chroma survives at that luma, and cg/dy are the same two measurements per
  * (U,V) cell for the hue-dependent part.
  */
+static void grade_px(const se_look *lk, int r, int g, int b, int *out);
+
+static const se_lut3 *s_bake_cube;
+
+void se_look_set_bake_cube(const se_lut3 *c) { s_bake_cube = c; }
+
+/* the bake's sample path: cube first, then the look, which is the order
+ * Develop uses (lut_apply_rows then se_look_rows) */
+static void bake_px(const se_look *lk, int r, int g, int b, int *out)
+{
+    if (s_bake_cube) {
+        uint16_t px[3];
+        px[0] = (uint16_t)(clamp8(r) * 257);
+        px[1] = (uint16_t)(clamp8(g) * 257);
+        px[2] = (uint16_t)(clamp8(b) * 257);
+        se_lut3_apply_row(s_bake_cube, px, 1);
+        grade_px(lk, (int)(px[0] / 257), (int)(px[1] / 257),
+                 (int)(px[2] / 257), out);
+        return;
+    }
+    grade_px(lk, r, g, b, out);
+}
+
 static void grade_px(const se_look *lk, int r, int g, int b, int *out)
 {
     uint8_t row[3];
@@ -474,7 +497,7 @@ void se_look_bake_yuv(const se_look *lk, se_yuvtbl *t)
         int o[3];
 
         /* Tone and cast: what a neutral pixel of this luma becomes. */
-        grade_px(lk, y, y, y, o);
+        bake_px(lk, y, y, y, o);
         t->y[y]     = (uint8_t)clamp8(luma8(o[0], o[1], o[2]));
         /* Convert output (B - Y) and (R - Y) to BT.601 Cb/Cr scale (* 144 / 256, * 183 / 256) */
         int uo = ((o[2] - t->y[y]) * 144) / 256;
@@ -491,7 +514,7 @@ void se_look_bake_yuv(const se_look *lk, se_yuvtbl *t)
             for (s = -1; s <= 1; s += 2) {
                 int r, g, b;
                 if (ycc_px(y, probe * s, probe * s, &r, &g, &b) != 0) continue;
-                grade_px(lk, r, g, b, o);
+                bake_px(lk, r, g, b, o);
                 {
                     int oy = luma8(o[0], o[1], o[2]);
                     int ou = ((o[2] - oy) * 144) / 256 - t->uoff[y];
@@ -523,8 +546,8 @@ void se_look_bake_yuv(const se_look *lk, se_yuvtbl *t)
 
         if (ycc_px(128, 32, 0, &r1, &g1, &b1) == 0 &&
             ycc_px(128, 0, 32, &r2, &g2, &b2) == 0) {
-            grade_px(lk, r1, g1, b1, o1);
-            grade_px(lk, r2, g2, b2, o2);
+            bake_px(lk, r1, g1, b1, o1);
+            bake_px(lk, r2, g2, b2, o2);
 
             int oy1 = luma8(o1[0], o1[1], o1[2]);
             int oy2 = luma8(o2[0], o2[1], o2[2]);
@@ -566,7 +589,7 @@ void se_look_bake_yuv(const se_look *lk, se_yuvtbl *t)
             t->cg[cell] = 64;
             t->dy[cell] = 0;
             if (ycc_px(128, u, v, &r, &g, &b) != 0) continue;
-            grade_px(lk, r, g, b, o);
+            bake_px(lk, r, g, b, o);
             oy = luma8(o[0], o[1], o[2]);
             ou = (((o[2] - oy) * 144) / 256) - t->uoff[128];
             ov = (((o[0] - oy) * 183) / 256) - t->voff[128];
@@ -612,7 +635,7 @@ void se_look_bake_yuv3(const se_look *lk, se_yuv3 *t)
 
     for (y = 0; y < 256; y++) {
         int o[3];
-        grade_px(lk, y, y, y, o);
+        bake_px(lk, y, y, y, o);
         t->y[y] = (uint8_t)clamp8(luma8(o[0], o[1], o[2]));
     }
 
@@ -634,7 +657,7 @@ void se_look_bake_yuv3(const se_look *lk, se_yuv3 *t)
          * real result instead of an identity that would pull the edge toward
          * grey.
          */
-        grade_px(lk, clamp8(r), clamp8(g), clamp8(b), o);
+        bake_px(lk, clamp8(r), clamp8(g), clamp8(b), o);
         y2 = luma8(o[0], o[1], o[2]);
         t->v[k]     = (int16_t)(y2 - t->y[yy]);   /* vs grey of the same luma */
         t->v[k + 1] = (int16_t)clamp_c(div_round((o[2] - y2) * 256, 454));

@@ -79,6 +79,26 @@ static CONFIG_INT("film.sim.grain", film_sim_grain, 8);
  * to BE the look rather than sit under it.
  */
 static CONFIG_INT("film.sim.lut", film_sim_lut, 0);
+
+/*
+ * The stock's own cube, or NULL. Only stocks that arrived with a
+ * ML/FILMSIM/LUT/ entry have one; the module's built-in names point at
+ * ML/DATA/<CODE>.CUB, which does not exist, so they keep the global LOOK.BIN.
+ * One function, so the develop path and the LiveView bake cannot disagree
+ * about which cube is in play.
+ */
+static const char *fs_own_lut_path(void)
+{
+  if (film_active_count <= 0) return NULL;
+  {
+    int idx = fs_clamp_i(film_sim_stock, 0, film_active_count - 1);
+    const char *p = film_active_table[idx].lut;
+    if (p && !strncmp(p, "ML/FILMSIM/LUT/", 15)) return p;
+  }
+  return NULL;
+}
+
+
 /* Grade LiveView through the joint (y,u,v) lattice instead of the
  * preset tables. Off by default: it is ~3.5x the lookups and the
  * camera's frame budget for that is unmeasured. */
@@ -994,18 +1014,9 @@ static void fs_sync() {
    * logged by the loader, which then develops without it.
    */
   {
-    const char *own = NULL;
-    if (film_active_count > 0) {
-      int idx = fs_clamp_i(film_sim_stock, 0, film_active_count - 1);
-      const char *p = film_active_table[idx].lut;
-      /* A string test, not a file test: fs_sync also runs from the stock menu
-       * handler, and this module does no card I/O in a key handler. Stocks
-       * that came with the module name ML/DATA/<CODE>.CUB, which does not
-       * exist, so only the imported ones -- always under this prefix -- take
-       * this path and the rest keep the global LOOK.BIN. */
-      if (p && !strncmp(p, "ML/FILMSIM/LUT/", 15))
-        own = p;
-    }
+    /* A string test, not a file test: fs_sync also runs from the stock menu
+     * handler, and this module does no card I/O in a key handler. */
+    const char *own = fs_own_lut_path();
     se_cam_lut_path(own ? own : (film_sim_lut ? "ML/FILMSIM/LOOK.BIN" : NULL));
   }
 }
@@ -2135,7 +2146,7 @@ static void fs_slot_backup_task(void *unused) {
       fs_yuvlook_dirty = 0;
       char stk[FS_PATH_LEN];
       if (fs_active_stock_path(stk, sizeof stk, NULL)) {
-        if (fs_yuvlook_bake(stk, film_sim_strength) == 0 &&
+        if (fs_yuvlook_bake_lut(stk, film_sim_strength, fs_own_lut_path()) == 0 &&
             fs_yuvlook_name()[0]) {
           fs_log("yuvgrade: re-baked '%s' from %s at strength %d",
                  fs_yuvlook_name(), stk, film_sim_strength);
@@ -7838,7 +7849,7 @@ static unsigned int film_sim_init() {
     fs_log_flush();
     char stk[FS_PATH_LEN];
     if (fs_active_stock_path(stk, sizeof stk, NULL)) {
-      if (fs_yuvlook_bake(stk, film_sim_strength) == 0 &&
+      if (fs_yuvlook_bake_lut(stk, film_sim_strength, fs_own_lut_path()) == 0 &&
           fs_yuvlook_name()[0]) {
         fs_log("yuvgrade: baked '%s' from %s at strength %d",
                fs_yuvlook_name(), stk, film_sim_strength);

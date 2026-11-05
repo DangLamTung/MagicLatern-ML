@@ -59,7 +59,80 @@ static se_yuv3   tbl3;
 static int       baked;
 static char      baked_name[SE_STOCK_NAME];
 
-int fs_yuvlook_bake(const char *stock_path, int strength)
+
+/*
+ * Load a FLUT cube for the bake. The develop path has its own loader in
+ * se_cam.c bound to a module-level path; this one is handed the path, so the
+ * two cannot disagree about which cube a bake used.
+ *
+ * A missing or malformed file is not fatal: the bake runs without it and the
+ * caller logs, because a stock whose colour lives in the cube would otherwise
+ * silently lose that colour in LiveView -- which is the bug this fixes.
+ */
+static int bake_cube_load(const char *path, se_lut3 *cube, uint16_t **hold)
+{
+    unsigned char h[8];
+    uint32_t size, need;
+    FILE *f;
+
+    *hold = NULL;
+    cube->size = 0;
+    cube->data = NULL;
+    if (!path || !path[0]) return 0;
+
+#ifdef SE_HOSTED
+    f = fopen(path, "rb");
+#else
+    f = FIO_OpenFile(path, O_RDONLY | O_SYNC);
+#endif
+    if (!f) return -1;
+#ifdef SE_HOSTED
+    if (fread(h, 1, sizeof h, f) != sizeof h) { fclose(f); return -1; }
+#else
+    if (FIO_ReadFile(f, h, sizeof h) != (int)sizeof h) { FIO_CloseFile(f); return -1; }
+#endif
+    if (h[0] != 'F' || h[1] != 'L' || h[2] != 'U' || h[3] != 'T') {
+#ifdef SE_HOSTED
+        fclose(f);
+#else
+        FIO_CloseFile(f);
+#endif
+        return -1;
+    }
+    size = (uint32_t)(h[4] | (h[5] << 8));
+    need = (uint32_t)se_lut3_bin_bytes((int)size);
+    if (!need || need != 8u + size * size * size * 6u || size > SE_LUT3_MAX_SIZE) {
+#ifdef SE_HOSTED
+        fclose(f);
+#else
+        FIO_CloseFile(f);
+#endif
+        return -1;
+    }
+    *hold = malloc(need - 8u);
+    if (!*hold) {
+#ifdef SE_HOSTED
+        fclose(f);
+#else
+        FIO_CloseFile(f);
+#endif
+        return -1;
+    }
+#ifdef SE_HOSTED
+    if (fread(*hold, 1, need - 8u, f) != need - 8u) { fclose(f); free(*hold); *hold = NULL; return -1; }
+    fclose(f);
+#else
+    if (FIO_ReadFile(f, (char *)*hold, (int)(need - 8u)) != (int)(need - 8u)) {
+        FIO_CloseFile(f); free(*hold); *hold = NULL; return -1;
+    }
+    FIO_CloseFile(f);
+#endif
+    cube->size = (int)size;
+    cube->data = *hold;
+    return 1;
+}
+
+int fs_yuvlook_bake_lut(const char *stock_path, int strength, const char *lut_path)
 {
     se_stock st;
     se_look  lk;
@@ -112,14 +185,27 @@ int fs_yuvlook_bake(const char *stock_path, int strength)
 
     se_look_from_stock(&st, 1, &lk);
     se_look_set_strength(&lk, strength);
-    se_look_bake_yuv(&lk, &tbl);
-    /* The LiveView filter shows the same look through the joint lattice, so
-     * the panel and the file cannot disagree about which stock is loaded. */
-    se_look_bake_yuv3(&lk, &tbl3);
 
-    snprintf(baked_name, sizeof baked_name, "%s", st.name);
+    {
+        se_lut3 cube;
+        uint16_t *hold = NULL;
+        int got = bake_cube_load(lut_path, &cube, &hold);
+        if (got < 0 && lut_path && lut_path[0])
+            se_log("bake: %s unreadable, LiveView has the .fs only", lut_path);
+        se_look_set_bake_cube(got > 0 ? &cube : NULL);
+        se_look_bake_yuv(&lk, &tbl);
+        se_look_bake_yuv3(&lk, &tbl3);
+        se_look_set_bake_cube(NULL);
+        free(hold);
+    }
     baked = 1;
+    snprintf(baked_name, sizeof baked_name, "%s", st.name);
     return 0;
+}
+
+int fs_yuvlook_bake(const char *stock_path, int strength)
+{
+    return fs_yuvlook_bake_lut(stock_path, strength, NULL);
 }
 
 int fs_yuvlook_ready(void) { return baked; }

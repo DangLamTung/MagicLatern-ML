@@ -40,6 +40,7 @@
 
 #include "se.h"
 #include "stock.h"
+#include "lut.h"
 
 /*
  * Chroma at which the per-hue controls reach full strength, 0..255.
@@ -198,6 +199,14 @@ typedef struct {
     int8_t  dy[SE_YUV_CELLS];              /* extra luma per hue cell       */
     int     strength;                      /* 0..100 applied when grading   */
 } se_yuvtbl;
+
+/*
+ * A stock's colour can live in a 3D cube rather than in the .fs. Develop
+ * applies that cube as its own stage before the look, so the bake has to as
+ * well or LiveView and the developed file disagree for every such stock.
+ * Set it before baking, clear it after; NULL means "no cube".
+ */
+void se_look_set_bake_cube(const se_lut3 *c);
 
 void se_look_bake_yuv(const se_look *lk, se_yuvtbl *t);
 

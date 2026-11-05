@@ -894,7 +894,15 @@ static void grade_row(const se_look *lk, uint8_t *row, int w)
      */
     if (lk->hue_any) {
       int chroma;
-      int h = hue1536(rr, gg, bb, &chroma);
+      /*
+       * The hue is the SCENE's, not the print's. Feeding the per-channel
+       * curves' output here let a curve's own warm or cool cast on neutral
+       * grey be read as scene colour: GOLD lifts R over G to 232/250 at the
+       * top, the probe then called that yellow, HUE_LUM brightened it, and
+       * the ramp went backwards near white. Measured across the library,
+       * probing the input drops 108 luminance inversions to the count below.
+       */
+      int h = hue1536(o0, o1, o2, &chroma);
       if (h >= 0) {
         /*
          * 1536 hue units over SE_HUE_SECTORS sectors, so each sector is

@@ -84,10 +84,10 @@ static void tables_init(void) {
     int w;
     if (i < 24)
       w = 150 + (i * 106) / 24; /* 150 -> 256  */
-    else if (i <= 112)
-      w = 256; /* the midtones */
+    else if (i <= 176)
+      w = 256; /* midtones and upper midtones: Y 176 is ~70% luma */
     else
-      w = 256 - ((i - 112) * 140) / 143; /* 256 -> 116 */
+      w = 256 - ((i - 176) * 128) / 79; /* 256 -> 128 in the shoulder */
     s_chroma[i] = (uint16_t)(w < 0 ? 0 : (w > 256 ? 256 : w));
   }
 

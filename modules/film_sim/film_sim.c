@@ -1388,6 +1388,7 @@ static volatile int fs_creator_saving;
  * second look silently overwrote the first. Slot 0 keeps the old name so
  * existing logs and docs still make sense. */
 static int fs_creator_slot;
+static int fs_creator_initialised;
 static char fs_creator_saved_name[12];
 static const char *fs_slot_names[] = { "WHEEL (1)", "WHEEL2", "WHEEL3", "WHEEL4" };
 
@@ -4936,6 +4937,12 @@ static MENU_UPDATE_FUNC(fs_name_show_update) {
 
 static int fs_slot_default(void) { return fs_clamp_i(fs_creator_slot, 0, 3); }
 
+static MENU_SELECT_FUNC(fs_creator_reset_look_action) {
+  (void)priv; (void)delta;
+  fs_creator_initialised = 0;
+  NotifyBox(1200, "Creator resets on next open");
+}
+
 static MENU_SELECT_FUNC(fs_name_reset) {
   int i;
   char src[12];
@@ -4984,6 +4991,13 @@ static struct menu_entry fs_menu_name[] = {
     NAME_CHAR_ROW(6)
     NAME_CHAR_ROW(7)
     NAME_CHAR_ROW(8)
+    {
+        .name = "Reset Look",
+        .select = fs_creator_reset_look_action,
+        .icon_type = IT_ACTION,
+        .help = "Start the Color Creator from flat again. Leaving the screen "
+                "keeps your work; this is the only thing that discards it.",
+    },
     {
         .name = "Use Slot Name",
         .select = fs_name_reset,
@@ -5084,7 +5098,13 @@ static int fs_creator_run(void) {
   fs_log_flush();
   beep_times(1);
 
-  fs_creator_defaults(&fs_creator, "BASE: CLASSIC CHROME");
+  /* Reopening the screen used to call fs_creator_defaults() every time, which
+   * threw away twelve wedges of work with no warning. The look now survives
+   * leaving the screen; User Look > Reset Look is how it starts over. */
+  if (!fs_creator_initialised) {
+    fs_creator_defaults(&fs_creator, "BASE: CLASSIC CHROME");
+    fs_creator_initialised = 1;
+  }
   fs_name_sync();
   fs_creator.slot_name = fs_look_name;
   /* start settled: a spring beginning at 0 would spin the whole ring into

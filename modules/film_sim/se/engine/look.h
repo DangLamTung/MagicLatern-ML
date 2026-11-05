@@ -161,6 +161,8 @@ typedef struct {
     int      strength;       /* 0..100, 100 = the stock as written       */
     int      grain;          /* 0..100, 0 = none                         */
     int      grain_cell;     /* 1..9 pixels at full size                 */
+    int      grain_scale;    /* the decode scale the cell was divided by, so an
+                              * override can recompute it the same way      */
 } se_look;
 
 /* Resolve a stock into the above. `scale` is the decode scale (1, 2 or 4):
@@ -174,6 +176,11 @@ void se_look_set_strength(se_look *lk, int strength);
 /* Saturation on top of the stock's own, 100 = as written. Applies to the
  * baked luma/chroma tables as well, so both paths move together. */
 void se_look_set_satboost(se_look *lk, int boost);
+
+/* Override the stock's GRAIN_SIZE (0..100). -1 leaves the stock's own value.
+ * The cell is recomputed against the same decode scale the stock used, so a
+ * half-size frame stays half as grainy. */
+void se_look_set_grain_size(se_look *lk, int size);
 
 /* --------------------------------------------------- shot-time tables -- */
 /*
@@ -189,7 +196,8 @@ void se_look_set_satboost(se_look *lk, int boost);
  * error away from the develop on a real frame, because it had to guess how the
  * per-channel curves combine.
  */
-#define SE_YUV_CELLS 1024                  /* 32 x 32 cells over U,V        */
+#define SE_YUV_GRID  64                    /* cells per chroma axis        */
+#define SE_YUV_CELLS (SE_YUV_GRID*SE_YUV_GRID) /* 64 x 64 over U,V         */
 typedef struct {
     uint8_t y[256];                        /* graded luma at each luma      */
     uint8_t gain[256];                     /* chroma gain, Q6, 64 = unity   */

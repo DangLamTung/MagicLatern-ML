@@ -35,6 +35,8 @@ void se_cam_lut_path(const char *p);
 
 /* Saturation on top of the stock's own, 100 = as written, 200 = double. */
 void se_cam_set_satboost(int s);
+/* -1 keeps each stock's GRAIN_SIZE; 0..100 overrides it. */
+void se_cam_set_grainsize(int v);
 
 /* Called with a stage name and 0..100. May be NULL. */
 typedef void (*se_cam_progress_fn)(void *ctx, const char *stage, int percent);

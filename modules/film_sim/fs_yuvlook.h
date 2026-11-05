@@ -13,6 +13,7 @@ int  fs_yuvlook_bake(const char *stock_path, int strength);
 /* Same bake, with the stock's own 3D cube applied before the look -- the
  * order Develop uses. NULL lut_path is exactly fs_yuvlook_bake(). */
 void fs_yuvlook_set_satboost(int s);
+void fs_yuvlook_set_grainsize(int v);
 int  fs_yuvlook_bake_lut(const char *stock_path, int strength,
                          const char *lut_path);
 

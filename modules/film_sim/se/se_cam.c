@@ -409,6 +409,9 @@ void se_cam_set_strength(int s) { se_strength = (s < 0) ? 0 : (s > 100 ? 100 : s
  * multiplier moves it. This one number scales all stocks at once so the look
  * can be tuned to taste without editing fourteen recipe files.
  */
+static int se_grainsize = -1;
+void se_cam_set_grainsize(int v) { se_grainsize = (v < -1) ? -1 : (v > 100 ? 100 : v); }
+
 static int se_satboost = 100;
 void se_cam_set_satboost(int s) { se_satboost = (s < 20) ? 20 : (s > 200 ? 200 : s); }
 
@@ -1153,6 +1156,7 @@ se_err se_cam_develop(const char *cr2_path, const char *stock_path,
     se_look_from_stock(&st, SE_DECODE_SCALE, &lk);
     se_look_set_strength(&lk, se_strength);
     se_look_set_satboost(&lk, se_satboost);
+    se_look_set_grain_size(&lk, se_grainsize);
     lookcost = se_look_fit(&lk, ow, SE_LOOK_BUDGET);
     (void)lookcost;
 
@@ -1592,6 +1596,7 @@ static se_err se_cam_develop_mraw(struct dev *d, const se_cr2_info *info,
     se_look_from_stock(st, 1, &lk);
     se_look_set_strength(&lk, se_strength);
     se_look_set_satboost(&lk, se_satboost);
+    se_look_set_grain_size(&lk, se_grainsize);
     /* The framing window, or look_emit drops every row: it keeps
      * crop_y0..crop_y1 and the struct starts zeroed. */
     se_cam_aspect_window(W, H, &d->crop_x0, &d->crop_x1, &d->crop_y0, &d->crop_y1);

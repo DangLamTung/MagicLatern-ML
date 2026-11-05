@@ -319,6 +319,7 @@ void se_look_from_stock(const se_stock *s, int scale, se_look *lk) {
    * halving with a real spread -- 1 at the fine end, 4 or 5 at the
    * coarse end.
    */
+  lk->grain_scale = scale;
   lk->grain_cell = 1 + (int)(s->grain_size / 12.0f);
   if (scale > 1)
     lk->grain_cell = (lk->grain_cell + scale - 1) / scale;
@@ -385,6 +386,17 @@ void se_look_set_strength(se_look *lk, int strength) {
 /* Saturation on top of the stock's own, 100 = as written. One number for every
  * stock, because the per-hue stage only reaches full strength above a chroma
  * most of a real photograph never reaches -- see SE_HUE_FULL. */
+void se_look_set_grain_size(se_look *lk, int size)
+{
+  if (!lk || size < 0)
+    return;                     /* -1: keep whatever the stock asked for */
+  lk->grain_cell = 1 + size / 12;
+  if (lk->grain_scale > 1)
+    lk->grain_cell = (lk->grain_cell + lk->grain_scale - 1) / lk->grain_scale;
+  if (lk->grain_cell < 1)
+    lk->grain_cell = 1;
+}
+
 void se_look_set_satboost(se_look *lk, int boost) {
   int c;
   if (!lk)
@@ -579,11 +591,11 @@ void se_look_bake_yuv(const se_look *lk, se_yuvtbl *t)
     }
 
     /* Per hue cell, at mid grey: the hue-dependent gain and luma. */
-    for (cv = 0; cv < 32; cv++) {
-        for (cu = 0; cu < 32; cu++) {
-            int u = cu * 8 + 4 - 128;
-            int v = cv * 8 + 4 - 128;
-            int cell = cv * 32 + cu;
+    for (cv = 0; cv < SE_YUV_GRID; cv++) {
+        for (cu = 0; cu < SE_YUV_GRID; cu++) {
+            int u = cu * (256 / SE_YUV_GRID) + (128 / SE_YUV_GRID) - 128;
+            int v = cv * (256 / SE_YUV_GRID) + (128 / SE_YUV_GRID) - 128;
+            int cell = cv * SE_YUV_GRID + cu;
             int r, g, b, o[3], oy, ou, ov, mag, cg, dy;
 
             t->cg[cell] = 64;
@@ -1175,6 +1187,12 @@ static void add_glow(const se_look *lk, uint8_t *row, int w, const int *colsum,
   }
 }
 
+/* one lattice point, signed: -32768..32767 */
+static int grain_val(unsigned xc, unsigned yc, unsigned seed)
+{
+  return (int)(grain_hash(xc, yc, seed) & 0xFFFFu) - 32768;
+}
+
 static void grain_row(const se_look *lk, uint8_t *row, int w, int y) {
   int x, cell = lk->grain_cell;
   /* 0..100 -> about +-15 at full strength. This was 72/100, which put
@@ -1191,22 +1209,63 @@ static void grain_row(const se_look *lk, uint8_t *row, int w, int y) {
    * dividing. Same values, no divide.
    */
   {
+    /*
+     * Two octaves, interpolated.
+     *
+     * The old grain was one hash per square cell: every cell a flat block, and
+     * every block exactly on a grid, so at large sizes it read as tiles rather
+     * than emulsion. Real grain is clumps of varying density.
+     *
+     * Octave 1 interpolates the hash lattice bilinearly, which turns the
+     * squares into smooth blobs. The corners are hashed once per CELL, not per
+     * pixel, so the per-pixel cost stays a few multiplies. Interpolation
+     * flattens the variance, hence the 3/2 gain.
+     *
+     * Octave 2 is a plain half-size lattice at a quarter weight. On its own it
+     * would be the same tiling problem; under octave 1 it breaks the blobs up
+     * and gives the fine structure a fast film has.
+     */
     const unsigned yc = (unsigned)(y / cell);
-    unsigned xc = 0;
-    int left = cell;
+    const int fy  = (int)(((y - (int)yc * (long)cell) * 256) / cell);
+    const int ify = 256 - fy;
+    const int step = (cell > 0) ? 256 / cell : 256;
+    const int fine = (cell > 1) ? (cell >> 1) : 1;
+    const unsigned fyc = (unsigned)(y / fine);
+    unsigned xc = 0, fxc = 0;
+    int left = cell, fleft = fine, fx = 0, ifx = 256;
+    int a = grain_val(xc, yc, 0x5EEDu), b = grain_val(xc + 1, yc, 0x5EEDu);
+    int c = grain_val(xc, yc + 1, 0x5EEDu), d = grain_val(xc + 1, yc + 1, 0x5EEDu);
     for (x = 0; x < w; x++) {
-      int n = (int)(grain_hash(xc, yc, 0x5EEDu) & 0xFFFF);
+      int n, top, bot;
       if (--left <= 0) {
         left = cell;
         xc++;
+        fx = 0;
+        ifx = 256;
+        a = b;
+        c = d;
+        b = grain_val(xc + 1, yc, 0x5EEDu);
+        d = grain_val(xc + 1, yc + 1, 0x5EEDu);
       }
-      int d = ((n - 32768) * amp) >> 15;
-      int c;
-      for (c = 0; c < 3; c++) {
-        int v = row[x * 3 + c];
-        /* 4v(1-v), in eighths, so grain fades out at both ends */
-        int wgt = (v * (255 - v)) >> 6; /* 0..254 */
-        row[x * 3 + c] = (uint8_t)clamp8(v + ((d * wgt) >> 8));
+      top = a * ifx + b * fx;
+      bot = c * ifx + d * fx;
+      n = (((top * ify + bot * fy) >> 16) * 3) >> 1;
+      if (--fleft <= 0) {
+        fleft = fine;
+        fxc++;
+      }
+      n += grain_val(fxc, fyc, 0x9A31u) >> 2;
+      fx += step;
+      ifx = 256 - fx;
+      {
+        int dd = ((n - 32768) * amp) >> 15;
+        int ch;
+        for (ch = 0; ch < 3; ch++) {
+          int v = row[x * 3 + ch];
+          /* 4v(1-v), in eighths, so grain fades out at both ends */
+          int wgt = (v * (255 - v)) >> 6; /* 0..254 */
+          row[x * 3 + ch] = (uint8_t)clamp8(v + ((dd * wgt) >> 8));
+        }
       }
     }
   }

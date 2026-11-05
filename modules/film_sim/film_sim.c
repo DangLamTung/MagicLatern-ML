@@ -69,6 +69,8 @@ static CONFIG_INT("film.sim.strength", film_sim_strength, 100);
  * recipes at once. */
 static CONFIG_INT("film.sim.satboost", film_sim_satboost, 100);
 static CONFIG_INT("film.sim.grain", film_sim_grain, 8);
+/* -1 = leave each stock's own GRAIN_SIZE alone; 0..100 overrides it. */
+static CONFIG_INT("film.sim.grainsize", film_sim_grainsize, -1);
 /*
  * Apply an external 3D cube while developing.
  *
@@ -4724,6 +4726,8 @@ static void fs_develop_run(void) {
   se_cam_set_strength(film_sim_strength);
   se_cam_set_satboost(film_sim_satboost);
   fs_yuvlook_set_satboost(film_sim_satboost);
+  se_cam_set_grainsize(film_sim_grainsize);
+  fs_yuvlook_set_grainsize(film_sim_grainsize);
   if (fs_level() == FS_LEVEL_RAW) {
     dev_err = se_cam_develop_raw(cr2, stk, tmp, 2, fs_bath_progress,
                                  fs_develop_note, NULL);
@@ -7343,6 +7347,15 @@ static struct menu_entry fs_menu_look[] = {
         .priv = &film_sim_grain,
         .max = 100,
         .help = "Grain amount on top of what the stock itself asks for.",
+    },
+    {
+        .name = "Grain Size",
+        .priv = &film_sim_grainsize,
+        .min = -1, .max = 100,
+        .help = "-1 keeps each stock's own GRAIN_SIZE. 0..100 overrides it for "
+                "every stock: the engine turns it into a 1..9 pixel cell, and "
+                "that cell shrinks with the frame so a half-size develop is "
+                "not twice as grainy.",
     },
     {
         .name = "Pad to 3:2",

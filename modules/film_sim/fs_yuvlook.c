@@ -149,7 +149,9 @@ static int bake_cube_load(const char *path, se_lut3 *cube, uint16_t **hold)
  * film.sim.satboost through se_cam_set_satboost(); the bake never did, so the
  * slider moved the file and not the panel. */
 static int bake_satboost = 100;
+static int bake_grainsize = -1;
 void fs_yuvlook_set_satboost(int s) { bake_satboost = (s < 20) ? 20 : (s > 200 ? 200 : s); }
+void fs_yuvlook_set_grainsize(int v) { bake_grainsize = (v < -1) ? -1 : (v > 100 ? 100 : v); }
 
 int fs_yuvlook_bake_lut(const char *stock_path, int strength, const char *lut_path)
 {
@@ -205,6 +207,7 @@ int fs_yuvlook_bake_lut(const char *stock_path, int strength, const char *lut_pa
     se_look_from_stock(&st, 1, &lk);
     se_look_set_strength(&lk, strength);
     se_look_set_satboost(&lk, bake_satboost);
+    se_look_set_grain_size(&lk, bake_grainsize);
 
     {
         se_lut3 cube;
@@ -273,26 +276,22 @@ uint32_t fs_yuvlook_apply(unsigned char *buf, int width, int height, int stride)
             int y1  = p[3];
             int yav = (y0 + y1) >> 1;
             /*
-             * Bilinear between the four neighbouring chroma cells. Taking the
-             * nearest cell alone quantised U and V to steps of 8 levels, which
-             * is visible banding in any smooth sky -- LiveView never showed it
-             * because fs_core_process_rows() interpolates. Same table, same
-             * memory, four multiplies.
+             * Nearest cell of a 64x64 chroma grid.
+             *
+             * This was 32x32 nearest (8-level quantisation, visible banding
+             * in a smooth sky), then briefly 32x32 BILINEAR -- which fixed
+             * the banding and cost 5.3x on camera: 186 ms -> 992 ms for an
+             * 18 MP frame, because it is eight table reads and eight
+             * multiplies per pixel pair. The grid is now four times finer on
+             * each axis (4-level quantisation) and the lookup is a shift
+             * again, so the shot path is as cheap as it was.
              */
             int uu = (u + 128 < 0) ? 0 : (u + 128 > 255 ? 255 : u + 128);
             int vv = (v + 128 < 0) ? 0 : (v + 128 > 255 ? 255 : v + 128);
-            int iu = uu >> 3, iv = vv >> 3;
-            int fu = uu & 7, fv = vv & 7;
-            int iu1 = iu < 31 ? iu + 1 : 31, iv1 = iv < 31 ? iv + 1 : 31;
-            int c00 = iv * 32 + iu, c10 = iv * 32 + iu1;
-            int c01 = iv1 * 32 + iu, c11 = iv1 * 32 + iu1;
-            int w00 = (8 - fu) * (8 - fv), w10 = fu * (8 - fv);
-            int w01 = (8 - fu) * fv, w11 = fu * fv;
+            int cell = (vv >> 2) * SE_YUV_GRID + (uu >> 2);
             int g    = tbl.gain[yav];
-            int cg   = (tbl.cg[c00] * w00 + tbl.cg[c10] * w10 +
-                        tbl.cg[c01] * w01 + tbl.cg[c11] * w11) >> 6;
-            int dy   = (tbl.dy[c00] * w00 + tbl.dy[c10] * w10 +
-                        tbl.dy[c01] * w01 + tbl.dy[c11] * w11) >> 6;
+            int cg   = tbl.cg[cell];
+            int dy   = tbl.dy[cell];
             int cgg  = cg * g;
             int ru   = (tbl.matrix[0] * u + tbl.matrix[1] * v) >> 8;
             int rv   = (tbl.matrix[2] * u + tbl.matrix[3] * v) >> 8;

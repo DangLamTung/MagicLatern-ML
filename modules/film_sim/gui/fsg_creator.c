@@ -65,7 +65,53 @@ void fs_creator_register_palette(void)
     fsg_pal(pal, FS_CREATOR_WEDGES);
 }
 
+static const int sin30[12] = { 0, 500, 866, 1000, 866, 500,
+                               0, -500, -866, -1000, -866, -500 };
+
 /* ---- small drawing helpers over fills -------------------------------- */
+
+static void line_fill(int x0, int y0, int x1, int y1, int c)
+{
+    int dx = x1 > x0 ? x1 - x0 : x0 - x1;
+    int dy = -(y1 > y0 ? y1 - y0 : y0 - y1);
+    int sx = x0 < x1 ? 1 : -1;
+    int sy = y0 < y1 ? 1 : -1;
+    int err = dx + dy;
+
+    for (;;) {
+        fsg_fill(x0, y0, 1, 1, c);
+        if (x0 == x1 && y0 == y1) break;
+        {
+            int e2 = 2 * err;
+            if (e2 >= dy) { err += dy; x0 += sx; }
+            if (e2 <= dx) { err += dx; y0 += sy; }
+        }
+    }
+}
+
+/* sin/cos for a tenth of a degree, from the 30-degree table, in 0.001 units.
+ * Index 0 is +x, so angle 900 is straight up. */
+static void sincos10(int ang, int *s10, int *c10)
+{
+    int idx, f, a, b, id2;
+    if (ang < 0) ang += 3600;
+    ang %= 3600;
+    idx = (ang / 300) % 12;
+    f = ang % 300;
+    a = sin30[idx]; b = sin30[(idx + 1) % 12];
+    *s10 = a + (b - a) * f / 300;
+    id2 = (idx + 3) % 12;
+    a = sin30[id2]; b = sin30[(id2 + 1) % 12];
+    *c10 = a + (b - a) * f / 300;
+}
+
+static void dodec_point(int cx, int cy, int r, int ang10, int *ox, int *oy)
+{
+    int s10, c10;
+    sincos10(ang10, &s10, &c10);
+    *ox = cx + (r * c10) / 1000;
+    *oy = cy - (r * s10) / 1000;
+}
 
 static int isqrt_i(int v)
 {
@@ -83,24 +129,6 @@ static void circle_fill(int cx, int cy, int r, int colour)
     for (dy = -r; dy <= r; dy++) {
         int half = isqrt_i(r * r - dy * dy);
         fsg_fill(cx - half, cy + dy, half * 2 + 1, 1, colour);
-    }
-}
-
-/* The track the beads sit on: an annulus drawn a row at a time. */
-static void ring_band(int cx, int cy, int r0, int r1, int colour)
-{
-    int dy;
-    for (dy = -r1; dy <= r1; dy++) {
-        int outer, inner;
-        if (r1 * r1 - dy * dy < 0) continue;
-        outer = isqrt_i(r1 * r1 - dy * dy);
-        inner = (r0 * r0 > dy * dy) ? isqrt_i(r0 * r0 - dy * dy) : 0;
-        if (inner > 0) {
-            fsg_fill(cx - outer, cy + dy, outer - inner, 1, colour);
-            fsg_fill(cx + inner + 1, cy + dy, outer - inner, 1, colour);
-        } else {
-            fsg_fill(cx - outer, cy + dy, outer * 2 + 1, 1, colour);
-        }
     }
 }
 
@@ -138,20 +166,15 @@ static void bead(int cx, int cy, int size, int colour)
 
 /* sin/cos in degrees for the 12 positions, tenths of a unit. A table, so the
  * wheel geometry is exact and needs no libm on the camera. */
-static const int sin30[12] = { 0, 500, 866, 1000, 866, 500,
-                               0, -500, -866, -1000, -866, -500 };
-
 /* the ring's geometry, in one place: the static screen and the spin redraw
  * must agree or a bead would be erased where it was not drawn */
+#define CREATOR_PANEL_X 392   /* the wheel's box ends here */
 #define CREATOR_CX      196
 #define CREATOR_CY      250
 #define CREATOR_R_OUT   150
-#define CREATOR_R_BEAD  118
 #define CREATOR_R_IN    58
 #define CREATOR_BEAD_R  14      /* half the largest bead box                */
 #define CREATOR_DISC_BG FSG_PANEL_DARK
-#define CREATOR_BAND_R0 (CREATOR_R_BEAD - 16)
-#define CREATOR_BAND_R1 (CREATOR_R_BEAD + 16)
 
 static void ring_pos(int cx, int cy, int r, int i, int *ox, int *oy)
 {
@@ -201,102 +224,130 @@ static void footer(const char *keys)
     fsg_text(16, FSG_H - 33, FSG_T_SMALL, FSG_GREY, FSG_BG_DEEP, "%s", keys);
 }
 
+const char *const fs_creator_tabs[3] = { "Saturation", "Luminance", "Hue" };
+const int fs_creator_tab_field[3] = { 0, 2, 1 };
+
 /* ---- the wheel -------------------------------------------------------- */
 
 /* One wedge's bead. `sel` draws the halo and the inner disc. */
-static void draw_one_bead(const fs_creator_t *c, int i, int px, int py)
-{
-  int col = FSG_PIX(i);          /* palette slot, NOT an RGB value */
-  int neutral = (c->sat[i] == 100 && c->rot[i] == 0 && c->lum[i] == 100);
+/*
+ * The wheel as the reference UI draws it: a dodecagon whose vertex for each
+ * wedge moves in or out with that wedge's value, a coloured perimeter showing
+ * which colour each wedge is, and the twelve numbers around the rim. The whole
+ * figure rotates with `offset_q16`, so the dial turns the shape.
+ *
+ * Values map to radius with the neutral mid-point at R_MID: 100 for saturation
+ * and luminance, 0 for rotation, so "untouched" is a clean regular dodecagon.
+ */
+#define CREATOR_R_MID   88
+#define CREATOR_R_SPAN  32
+#define CREATOR_R_MAX   126    /* the coloured perimeter */
 
-  if (i == c->sel) {
-    circle_fill(px, py, 15, FSG_AMBER);   /* halo */
-    circle_fill(px, py, 12, FSG_BG_DEEP);
-    circle_fill(px, py, 10, col);
-  } else if (neutral) {
-    /* untouched: dark centre with a coloured ring, so a screen full of them
-     * reads as "nothing authored yet" at a glance */
-    circle_fill(px, py, 10, col);
-    circle_fill(px, py, 7, CREATOR_DISC_BG);
-  } else {
-    circle_fill(px, py, 10, FSG_WHITE);
-    circle_fill(px, py, 9, col);
+static int wedge_radius(const fs_creator_t *c, int i, int tab)
+{
+  int v   = (tab == 0) ? c->sat[i] : (tab == 1 ? c->rot[i] : c->lum[i]);
+  int mid  = (tab == 1) ? 0 : 100;
+  int span = (tab == 1) ? 180 : 100;
+  int d = v - mid;
+  if (d > span) d = span;
+  if (d < -span) d = -span;
+  return CREATOR_R_MID + (d * CREATOR_R_SPAN) / span;
+}
+
+/* angle of wedge i, in tenths of a degree, with index 0 at the top */
+static int wedge_angle(int i, int offset_q16)
+{
+  int off10 = (int)(((long long)offset_q16 * 300) / 65536);
+  return ((i * 300 - off10 + 900) % 3600 + 3600) % 3600;
+}
+
+void fsg_draw_creator_wheel(const fs_creator_t *c, int offset_q16)
+{
+  const int cx = CREATOR_CX, cy = CREATOR_CY;
+  int i, px[FS_CREATOR_WEDGES], py[FS_CREATOR_WEDGES];
+  char num[8];
+
+  fs_creator_register_palette();
+
+  /* clear the wheel's box only: the right-hand panel is untouched and stays
+   * in the idle buffer, which is what makes a spin frame cheap */
+  fsg_fill(0, FSG_CREATOR_RING_Y0, CREATOR_PANEL_X,
+           FSG_CREATOR_RING_Y1 - FSG_CREATOR_RING_Y0, FSG_BG);
+
+  disc(cx, cy, CREATOR_R_OUT, FSG_PANEL_DARK);
+  disc(cx, cy, CREATOR_R_IN, FSG_BG_DEEP);
+
+  for (i = 0; i < FS_CREATOR_WEDGES; i++)
+    dodec_point(cx, cy, wedge_radius(c, i, c->field),
+                wedge_angle(i, offset_q16), &px[i], &py[i]);
+
+  /* the coloured perimeter: each edge in its wedge's colour, two rows thick */
+  for (i = 0; i < FS_CREATOR_WEDGES; i++) {
+    int x1, y1, x2, y2;
+    dodec_point(cx, cy, CREATOR_R_MAX, wedge_angle(i, offset_q16), &x1, &y1);
+    dodec_point(cx, cy, CREATOR_R_MAX, wedge_angle(i + 1, offset_q16), &x2, &y2);
+    line_fill(x1, y1, x2, y2, FSG_PIX(i));
+    line_fill(x1, y1 + 1, x2, y2 + 1, FSG_PIX(i));
+  }
+
+  /* the value polygon, then its dots: a dot needs a dark skirt or one that
+   * lands on the perimeter -- same colour, same rows -- disappears into it */
+  for (i = 0; i < FS_CREATOR_WEDGES; i++) {
+    int j = (i + 1) % FS_CREATOR_WEDGES;
+    line_fill(px[i], py[i], px[j], py[j], FSG_WHITE);
+  }
+  for (i = 0; i < FS_CREATOR_WEDGES; i++) {
+    circle_fill(px[i], py[i], i == c->sel ? 8 : 6,
+                i == c->sel ? FSG_AMBER : FSG_BG_DEEP);
+    circle_fill(px[i], py[i], i == c->sel ? 5 : 4, FSG_PIX(i));
+  }
+
+  /* the twelve numbers, outside the perimeter */
+  for (i = 0; i < FS_CREATOR_WEDGES; i++) {
+    int x, y;
+    dodec_point(cx, cy, CREATOR_R_MAX + 21, wedge_angle(i, offset_q16), &x, &y);
+    snprintf(num, sizeof num, "%d", i);
+    fsg_text(x - 3, y - 5, FSG_T_SMALL,
+             i == c->sel ? FSG_AMBER : FSG_GREY, FSG_PANEL_DARK, "%s", num);
+  }
+
+  /* the hub: which wedge is selected and its value in the active series */
+  fsg_text(cx - 40, cy - 18, FSG_T_MED, FSG_WHITE, FSG_BG_DEEP, "%s",
+           fs_creator_wedge_name(c->sel));
+  {
+    int v = (c->field == 0) ? c->sat[c->sel]
+          : (c->field == 1) ? c->rot[c->sel] : c->lum[c->sel];
+    snprintf(num, sizeof num, (c->field == 1) ? "%+d" : "%d", v);
+    fsg_text(cx - 30, cy + 2, FSG_T_LARGE, FSG_AMBER, FSG_BG_DEEP, "%s", num);
+  }
+
+  /* the pointer the shape turns past: inside the perimeter, because the
+   * selected wedge is always the one at twelve o'clock and its number sits
+   * outside the perimeter -- a pointer out there hides the number being edited */
+  {
+    int y0 = cy - CREATOR_R_MAX + 4;
+    fsg_fill(cx - 7, y0 + 6, 15, 3, FSG_AMBER);
+    fsg_fill(cx - 5, y0 + 3, 11, 3, FSG_AMBER);
+    fsg_fill(cx - 3, y0, 7, 3, FSG_AMBER);
   }
 }
 
 /*
- * Rotate the ring by `offset_q16` of one wedge, redrawing only the beads.
- *
- * The bead for wedge i sits at (i - offset) * 30 degrees, so offset 0 puts
- * wedge 0 at the top; increasing offset turns the ring the other way, which
- * is the direction the dial turns.
+ * The rotation entry point. The old bead ring kept per-bead positions in
+ * `sp` so it could erase just those; the radar has no such trick -- a new
+ * angle moves every vertex, edge and number -- so it repaints the wheel box
+ * and the caller blits those rows. `sp` is accepted and ignored so the
+ * animation code in film_sim.c keeps one call site for both screens.
  */
 void fsg_draw_creator_beads(const fs_creator_t *c, int offset_q16,
                             fs_creator_spin_t *sp)
 {
-  int i, nx[FS_CREATOR_WEDGES], ny[FS_CREATOR_WEDGES];
-
-  for (i = 0; i < FS_CREATOR_WEDGES; i++) {
-    /* tenths of a degree, from the fixed-point offset: 30 deg per wedge, 10
-     * units each, so 300 units a wedge and 65536/300 in Q */
-    int off10 = (int)(((long long)offset_q16 * 300) / 65536);
-    /* index 0 of sin30 is +x; the pointer is at the top, a quarter turn on */
-    int ang = (i * 300 - off10 + 900) % 3600;
-    int idx, s10, c10;
-    if (ang < 0) ang += 3600;
-    idx = (ang / 300) % 12;
-    /* linear interpolation between the 30-degree table entries */
-    {
-      int f = ang % 300;
-      int a = sin30[idx], b = sin30[(idx + 1) % 12];
-      s10 = a + (b - a) * f / 300;
-    }
-    {
-      int id2 = (idx + 3) % 12, f = ang % 300;
-      int a = sin30[id2], b = sin30[(id2 + 1) % 12];
-      c10 = a + (b - a) * f / 300;
-    }
-    nx[i] = CREATOR_CX + (CREATOR_R_BEAD * c10) / 1000;
-    ny[i] = CREATOR_CY - (CREATOR_R_BEAD * s10) / 1000;
-  }
-
-  /*
-   * Erase, then put the track back.
-   *
-   * A bead sits ON the track band, so a flat box of disc colour leaves a dark
-   * square through it -- the first spinning frame came out with a dashed
-   * ring. Redrawing the whole band costs ~270 row fills and is simpler, and
-   * still cheaper, than classifying every pixel of twelve erase boxes.
-   */
-  if (sp->valid) {
-    for (i = 0; i < FS_CREATOR_WEDGES; i++)
-      fsg_fill(sp->x[i] - 16, sp->y[i] - 16, 33, 33, CREATOR_DISC_BG);
-    ring_band(CREATOR_CX, CREATOR_CY, CREATOR_BAND_R0, CREATOR_BAND_R1,
-              FSG_PANEL_HI);
-  }
-  for (i = 0; i < FS_CREATOR_WEDGES; i++)
-    draw_one_bead(c, i, nx[i], ny[i]);
-
-  /*
-   * The pointer the ring turns past. Redrawn every frame because a bead
-   * sliding along the track passes over it.
-   */
-  {
-    int y0 = CREATOR_CY - CREATOR_R_OUT + 2;
-    fsg_fill(CREATOR_CX - 7, y0, 15, 3, FSG_AMBER);
-    fsg_fill(CREATOR_CX - 5, y0 + 3, 11, 3, FSG_AMBER);
-    fsg_fill(CREATOR_CX - 3, y0 + 6, 7, 3, FSG_AMBER);
-    fsg_fill(CREATOR_CX - 1, y0 + 9, 3, 3, FSG_AMBER);
-  }
-
-  for (i = 0; i < FS_CREATOR_WEDGES; i++) { sp->x[i] = nx[i]; sp->y[i] = ny[i]; }
-  sp->valid = 1;
+  (void)sp;
+  fsg_draw_creator_wheel(c, offset_q16);
 }
 
 void fsg_draw_creator(const fs_creator_t *c)
 {
-    const int cx = CREATOR_CX, cy = CREATOR_CY;
-    const int r_out = CREATOR_R_OUT, r_in = CREATOR_R_IN;
     char right[24];
     char value[32];
     int i;
@@ -309,23 +360,22 @@ void fsg_draw_creator(const fs_creator_t *c)
 
     fs_creator_register_palette();
 
-    /* the wheel body, then the track the beads sit on, then a dark hub */
-    disc(cx, cy, r_out, FSG_PANEL_DARK);
-    ring_band(cx, cy, CREATOR_BAND_R0, CREATOR_BAND_R1, FSG_PANEL_HI);
-    disc(cx, cy, r_in - 8, FSG_BG_DEEP);
+    /* the three series tabs */
+    {
+        int t, tx = 16;
+        for (t = 0; t < 3; t++) {
+            int w = 118;
+            int on = (c->field == fs_creator_tab_field[t]);
+            fsg_fill(tx, 48, w, 26, on ? FSG_RED_MID : FSG_PANEL_DARK);
+            fsg_fill(tx, 48, w, 2, on ? FSG_AMBER : FSG_LINE_DIM);
+            fsg_text(tx + 10, 54, FSG_T_SMALL, on ? FSG_AMBER : FSG_GREY,
+                     on ? FSG_RED_MID : FSG_PANEL_DARK, "%s", fs_creator_tabs[t]);
+            tx += w + 6;
+        }
+    }
 
-    /*
-     * Beads are NOT drawn here. fsg_draw_creator_beads() owns them, because
-     * a full repaint can happen while the ring is still turning: drawing them
-     * here at the settled offset and again there at the spring's offset is
-     * two rings, which is exactly what the mid-spin render showed.
-     */
-
-    /* Only the wedge name in the hub, and only when it fits: fsg_text fills
-     * its background, so anything wider than the hole is a black bar across
-     * the ring -- which is exactly what the first render did. */
-    fsg_text(cx - 30, cy - 8, FSG_T_MED, FSG_WHITE, FSG_BG_DEEP, "%s",
-             fs_creator_wedge_name(c->sel));
+    /* the dodecagon radar is drawn by the shared wheel renderer */
+    fsg_draw_creator_wheel(c, c->sel * 65536);
 
     /* ---- the three dials, right-hand panel ---- */
     {
@@ -364,7 +414,7 @@ void fsg_draw_creator(const fs_creator_t *c)
             fsg_text(x, y + 34, FSG_T_SMALL, FSG_AMBER, FSG_BG, "UNSAVED");
     }
 
-    footer("DIAL wedge  UP/DOWN value  SET field  PLAY save  Q tone  MENU back");
+    footer("DIAL wedge  UP/DOWN value  SET series  PLAY save  Q tone  MENU back");
 }
 
 /* ---- the tone screen -------------------------------------------------- */
@@ -501,7 +551,14 @@ void fs_creator_step(fs_creator_t *c, int act)
         c->dirty = 1;
         break;
     case A_SET:
-        c->field = (c->field + 1) % (c->screen == 0 ? 3 : 2);
+        if (c->screen == 0) {
+            int t;
+            for (t = 0; t < 3; t++)
+                if (fs_creator_tab_field[t] == c->field) break;
+            c->field = fs_creator_tab_field[(t + 1) % 3];
+        } else {
+            c->field = (c->field + 1) % 2;
+        }
         break;
     case A_Q:
         c->screen ^= 1;

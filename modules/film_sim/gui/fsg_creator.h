@@ -62,6 +62,17 @@ typedef struct { int x[FS_CREATOR_WEDGES], y[FS_CREATOR_WEDGES]; int valid; } fs
 
 void fsg_draw_creator_beads(const fs_creator_t *c, int offset_q16,
                             fs_creator_spin_t *sp);
+
+/* The whole wheel at a given rotation: the frame the spin repaints. */
+void fsg_draw_creator_wheel(const fs_creator_t *c, int offset_q16);
+
+/*
+ * Tabs, as on the reference UI: Saturation, Luminance, Hue. The panel order is
+ * the panel's, not the struct's -- the struct is sat, rot, lum -- so tab_field
+ * is the only correct way to map both ways.
+ */
+extern const char *const fs_creator_tabs[3];
+extern const int fs_creator_tab_field[3];
 void fsg_draw_tone(const fs_creator_t *c);
 
 /*

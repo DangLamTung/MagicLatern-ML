@@ -1237,29 +1237,13 @@ static void grain_row(const se_look *lk, uint8_t *row, int w, int y) {
     int c = grain_val(xc, yc + 1, 0x5EEDu), d = grain_val(xc + 1, yc + 1, 0x5EEDu);
     for (x = 0; x < w; x++) {
       int n, top, bot;
-      if (--left <= 0) {
-        left = cell;
-        xc++;
-        fx = 0;
-        ifx = 256;
-        a = b;
-        c = d;
-        b = grain_val(xc + 1, yc, 0x5EEDu);
-        d = grain_val(xc + 1, yc + 1, 0x5EEDu);
-      }
       /* >>8 here, and >>8 again below: (a*ifx + b*fx) reaches 2^23, and
        * multiplying that by 256 to shift at the end overflows int32 at
        * the extreme lattice values. */
       top = (a * ifx + b * fx) >> 8;
       bot = (c * ifx + d * fx) >> 8;
       n = (((top * ify + bot * fy) >> 8) * 3) >> 1;
-      if (--fleft <= 0) {
-        fleft = fine;
-        fxc++;
-      }
       n += grain_val(fxc, fyc, 0x9A31u) >> 2;
-      fx += step;
-      ifx = 256 - fx;
       {
         /* +16384 rounds instead of flooring: >> on a negative value
          * floors, which biased every grained pixel down by ~1 level. */
@@ -1271,6 +1255,32 @@ static void grain_row(const se_look *lk, uint8_t *row, int w, int y) {
           int wgt = (v * (255 - v)) >> 6; /* 0..254 */
           row[x * 3 + ch] = (uint8_t)clamp8(v + ((dd * wgt + 128) >> 8));
         }
+      }
+      /*
+       * Advance AFTER the pixel, not before.
+       *
+       * Both counters used to be pre-decremented at the top of the body, so
+       * x = 0 consumed a step: with cell = 4 the first cell covered three
+       * pixels instead of four and every cell boundary in the row sat one
+       * pixel left of where it should, and the four lattice hashes computed
+       * before the loop were thrown away unused. Same for the fine octave.
+       */
+      if (--left <= 0) {
+        left = cell;
+        xc++;
+        fx = 0;
+        ifx = 256;
+        a = b;
+        c = d;
+        b = grain_val(xc + 1, yc, 0x5EEDu);
+        d = grain_val(xc + 1, yc + 1, 0x5EEDu);
+      } else {
+        fx += step;
+        ifx = 256 - fx;
+      }
+      if (--fleft <= 0) {
+        fleft = fine;
+        fxc++;
       }
     }
   }

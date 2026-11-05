@@ -415,6 +415,18 @@ void se_cam_set_grainsize(int v) { se_grainsize = (v < -1) ? -1 : (v > 100 ? 100
 static int se_satboost = 100;
 void se_cam_set_satboost(int s) { se_satboost = (s < 20) ? 20 : (s > 200 ? 200 : s); }
 
+/* Every path that builds a look must set the three session options, or the
+ * sliders apply to some develops and not others: the raw and grade-jpeg
+ * paths were missing all three. SE_DECODE_SCALE-1 sites cannot use this
+ * because their scale differs, so it takes the scale. */
+static void apply_look_options(se_look *lk)
+{
+    se_look_set_strength(lk, se_strength);
+    se_look_set_satboost(lk, se_satboost);
+    se_look_set_grain_size(lk, se_grainsize);
+}
+
+
 /*
  * Phase profile of the develop.
  *
@@ -1814,6 +1826,7 @@ se_err se_cam_develop_raw(const char *cr2_path, const char *stock_path,
     if (!sp.f) { e = SE_E_IO; goto done; }
 
     se_look_from_stock(&st, scale, &lk);
+    apply_look_options(&lk);
     se_develop_out_size(&info, scale, &ow, &oh);
     d.width = ow;
     d.height = oh;
@@ -2092,6 +2105,7 @@ se_err se_cam_grade_jpeg(const char *jpg_path, const char *stock_path,
     se_jpeg_scaled_size(ji.width, ji.height, SE_DECODE_SCALE, &ow, &oh);
 
     se_look_from_stock(&st, SE_DECODE_SCALE, &lk);
+    apply_look_options(&lk);
     se_arena_init(&arena, abuf, SE_ARENA);
     if (se_look_begin(&d.run, &lk, ow, &arena) != SE_OK) {
         e = SE_E_NOMEM;

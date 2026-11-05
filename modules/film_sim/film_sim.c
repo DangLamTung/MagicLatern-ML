@@ -4727,7 +4727,6 @@ static void fs_develop_run(void) {
   se_cam_set_satboost(film_sim_satboost);
   fs_yuvlook_set_satboost(film_sim_satboost);
   se_cam_set_grainsize(film_sim_grainsize);
-  fs_yuvlook_set_grainsize(film_sim_grainsize);
   if (fs_level() == FS_LEVEL_RAW) {
     dev_err = se_cam_develop_raw(cr2, stk, tmp, 2, fs_bath_progress,
                                  fs_develop_note, NULL);

@@ -360,11 +360,14 @@ se_err se_stock_parse(const char *text, size_t len, se_stock *s)
         se_log("stock '%s': ignored %d unknown key%s (%s)",
                s->name, nunknown, nunknown == 1 ? "" : "s", unknown);
 
-    return SE_OK;
-
     /* A stock that asked for halation and not for a colour gets the colour
      * halation actually is: the red-orange of light coming back up through
-     * the emulsion. Defaulting to zero would silently mean "no glow". */
+     * the emulsion. Defaulting to zero would silently mean "no glow".
+     *
+     * These three lines used to sit AFTER a stray `return SE_OK;`, so they
+     * never ran: any recipe with HALATION and no HAL_TINT -- every Color
+     * Creator save, and the imported stocks -- multiplied its glow by a tint
+     * of (0,0,0) and produced nothing while still paying for the blur. */
     if (s->hal_amount > 0.0f && !got_tint) {
         s->hal_tint[0] = 255.0f; s->hal_tint[1] = 64.0f; s->hal_tint[2] = 24.0f;
     }

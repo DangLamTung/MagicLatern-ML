@@ -39,9 +39,9 @@ int main(int argc, char **argv)
     printf("[MATRIX]\n%d\t%d\t%d\t%d\n",
            t->matrix[0], t->matrix[1], t->matrix[2], t->matrix[3]);
     printf("[2D]\ncg\tdy\n");
-    for (cv = 0; cv < 32; cv++)
-        for (cu = 0; cu < 32; cu++) {
-            int k = cv * 32 + cu;
+    for (cv = 0; cv < SE_YUV_GRID; cv++)
+        for (cu = 0; cu < SE_YUV_GRID; cu++) {
+            int k = cv * SE_YUV_GRID + cu;
             printf("%d\t%d\n", t->cg[k], t->dy[k]);
         }
     return 0;

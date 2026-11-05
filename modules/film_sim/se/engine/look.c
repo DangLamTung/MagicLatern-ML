@@ -1247,9 +1247,12 @@ static void grain_row(const se_look *lk, uint8_t *row, int w, int y) {
         b = grain_val(xc + 1, yc, 0x5EEDu);
         d = grain_val(xc + 1, yc + 1, 0x5EEDu);
       }
-      top = a * ifx + b * fx;
-      bot = c * ifx + d * fx;
-      n = (((top * ify + bot * fy) >> 16) * 3) >> 1;
+      /* >>8 here, and >>8 again below: (a*ifx + b*fx) reaches 2^23, and
+       * multiplying that by 256 to shift at the end overflows int32 at
+       * the extreme lattice values. */
+      top = (a * ifx + b * fx) >> 8;
+      bot = (c * ifx + d * fx) >> 8;
+      n = (((top * ify + bot * fy) >> 8) * 3) >> 1;
       if (--fleft <= 0) {
         fleft = fine;
         fxc++;
@@ -1258,13 +1261,15 @@ static void grain_row(const se_look *lk, uint8_t *row, int w, int y) {
       fx += step;
       ifx = 256 - fx;
       {
-        int dd = ((n - 32768) * amp) >> 15;
+        /* +16384 rounds instead of flooring: >> on a negative value
+         * floors, which biased every grained pixel down by ~1 level. */
+        int dd = ((n * amp) + 16384) >> 15;
         int ch;
         for (ch = 0; ch < 3; ch++) {
           int v = row[x * 3 + ch];
           /* 4v(1-v), in eighths, so grain fades out at both ends */
           int wgt = (v * (255 - v)) >> 6; /* 0..254 */
-          row[x * 3 + ch] = (uint8_t)clamp8(v + ((dd * wgt) >> 8));
+          row[x * 3 + ch] = (uint8_t)clamp8(v + ((dd * wgt + 128) >> 8));
         }
       }
     }

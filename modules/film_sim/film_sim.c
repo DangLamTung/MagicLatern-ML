@@ -4849,14 +4849,143 @@ static void fs_creator_anim(void)
 }
 
 /* Runs with the panel released. Formats the recipe off the key path. */
+/* ---- naming a look on camera ------------------------------------------ */
+/*
+ * ML has no text-entry widget: `edit_mode` only shapes how a NUMBER is
+ * rounded. So a name is spelled out one character per menu row, the way the
+ * rest of this module does everything else -- SET advances, Q goes back. The
+ * alphabet is A-Z, 0-9 and '-' because the file lands on a FAT card as
+ * ML/FILM/<NAME>.fs and 8.3 is what every other stock already uses.
+ */
+#define FS_NAME_LEN 8
+static const char *fs_name_chars[] = {
+  "A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O", "P", "Q", "R", "S", "T", "U", "V", "W", "X", "Y", "Z", "0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "-",
+};
+#define FS_NAME_N ((int)(sizeof fs_name_chars / sizeof fs_name_chars[0]))
+
+/* fs_slot_names[] is a MENU LABEL ("WHEEL (1)"); the file is WHEEL.fs. Those
+ * are not the same string and using the label as a name wrote "WHEEL (1". */
+static void fs_slot_file_name(int slot, char *out, int cap)
+{
+  if (slot <= 0) snprintf(out, cap, "WHEEL");
+  else           snprintf(out, cap, "WHEEL%d", slot + 1);
+}
+
+static int fs_slot_default(void);
+static MENU_SELECT_FUNC(fs_name_reset);
+
+static int fs_name_len = 4;
+/* "LOOK": L O O K */
+static int fs_name_pos[FS_NAME_LEN] = { 11, 14, 14, 10, 0, 0, 0, 0 };
+static char fs_look_name[FS_NAME_LEN + 1] = "LOOK";
+
+static void fs_name_sync(void)
+{
+  int i;
+  if (fs_name_len < 1) fs_name_len = 1;
+  if (fs_name_len > FS_NAME_LEN) fs_name_len = FS_NAME_LEN;
+  for (i = 0; i < fs_name_len; i++) {
+    int c = fs_clamp_i(fs_name_pos[i], 0, FS_NAME_N - 1);
+    fs_look_name[i] = fs_name_chars[c][0];
+  }
+  fs_look_name[fs_name_len] = 0;
+}
+
+static MENU_SELECT_FUNC(fs_slot_cycle) {
+  fs_creator_slot = (fs_slot_default() + (delta < 0 ? 3 : 1)) & 3;
+  fs_name_reset(NULL, 0);
+}
+
+static MENU_UPDATE_FUNC(fs_slot_update) {
+  char file[12];
+  fs_slot_file_name(fs_slot_default(), file, sizeof file);
+  MENU_SET_VALUE("%s -> %s.fs", fs_slot_names[fs_slot_default()], file);
+}
+
+static MENU_UPDATE_FUNC(fs_name_char_update) {
+  int c = fs_clamp_i(*(int *)entry->priv, 0, FS_NAME_N - 1);
+  fs_name_sync();
+  MENU_SET_VALUE("%s", fs_name_chars[c]);
+}
+
+static MENU_UPDATE_FUNC(fs_name_len_update) {
+  fs_name_sync();
+  MENU_SET_VALUE("%d of %d", fs_name_len, FS_NAME_LEN);
+}
+
+static MENU_UPDATE_FUNC(fs_name_show_update) {
+  fs_name_sync();
+  MENU_SET_VALUE("%s.fs", fs_look_name);
+}
+
+static int fs_slot_default(void) { return fs_clamp_i(fs_creator_slot, 0, 3); }
+
+static MENU_SELECT_FUNC(fs_name_reset) {
+  int i;
+  char src[12];
+  (void)delta;
+  fs_slot_file_name(fs_slot_default(), src, sizeof src);
+  for (i = 0; i < FS_NAME_LEN; i++) fs_name_pos[i] = 6;
+  for (i = 0; i < FS_NAME_LEN && src[i]; i++) {
+    int k;
+    for (k = 0; k < FS_NAME_N; k++)
+      if (fs_name_chars[k][0] == src[i]) { fs_name_pos[i] = k; break; }
+  }
+  fs_name_len = i;
+  fs_name_sync();
+}
+
+#define NAME_CHAR_ROW(n)                                                       \
+    {                                                                          \
+        .name = "Char " #n,                                                    \
+        .priv = &fs_name_pos[(n) - 1],                                          \
+        .max = FS_NAME_N - 1,                                                  \
+        .choices = fs_name_chars,                                              \
+        .update = fs_name_char_update,                                         \
+        .help = "SET: next character, Q: previous. A-Z, 0-9 and '-'.",          \
+    },
+
+static struct menu_entry fs_menu_name[] = {
+    {
+        .name = "Name",
+        .update = fs_name_show_update,
+        .help = "What the look is called: ML/FILM/<NAME>.fs. Eight characters "
+                "at most, because that is the 8.3 limit every stock on the "
+                "card already uses.",
+    },
+    {
+        .name = "Length",
+        .priv = &fs_name_len,
+        .min = 1, .max = FS_NAME_LEN,
+        .update = fs_name_len_update,
+        .help = "How many characters of the name are used.",
+    },
+    NAME_CHAR_ROW(1)
+    NAME_CHAR_ROW(2)
+    NAME_CHAR_ROW(3)
+    NAME_CHAR_ROW(4)
+    NAME_CHAR_ROW(5)
+    NAME_CHAR_ROW(6)
+    NAME_CHAR_ROW(7)
+    NAME_CHAR_ROW(8)
+    {
+        .name = "Use Slot Name",
+        .select = fs_name_reset,
+        .icon_type = IT_ACTION,
+        .help = "Reset the name to WHEEL / WHEEL2..4, the slot the creator "
+                "saves into.",
+    },
+    MENU_EOL,
+};
+
 static void fs_creator_save_task(void *unused) {
   char buf[2048];
   char path[64];
   char name[12];
   int n;
 
-  if (fs_creator_slot <= 0) snprintf(name, sizeof name, "WHEEL");
-  else                      snprintf(name, sizeof name, "WHEEL%d", fs_creator_slot + 1);
+  if (fs_look_name[0]) snprintf(name, sizeof name, "%s", fs_look_name);
+  else                 fs_slot_file_name(fs_slot_default(), name, sizeof name);
 
   fs_log("creator: save task started");
   fs_log_flush();
@@ -4913,7 +5042,8 @@ static int fs_creator_run(void) {
   beep_times(1);
 
   fs_creator_defaults(&fs_creator, "BASE: CLASSIC CHROME");
-  fs_creator.slot_name = fs_slot_names[fs_clamp_i(fs_creator_slot, 0, 3)];
+  fs_name_sync();
+  fs_creator.slot_name = fs_look_name;
   /* start settled: a spring beginning at 0 would spin the whole ring into
    * place every time the screen opens */
   fs_creator_spring.x = 0;
@@ -7219,11 +7349,19 @@ static struct menu_entry fs_menu_userlook[] = {
         .help = "Make ML/FILM/WHEEL4.fs the active look.",
     },
     {
+        .name = "Look Name",
+        .select = menu_open_submenu,
+        .icon_type = IT_ACTION,
+        .help = "Spell the name the Color Creator saves as, up to eight "
+                "characters. Defaults to the slot name.",
+        .children = fs_menu_name,
+    },
+    {
         .name = "Save Into",
-        .priv = &fs_creator_slot,
-        .min = 0, .max = 3,
-        .choices = fs_slot_names,
-        .help = "Which file the Color Creator writes: WHEEL, then WHEEL2..4.",
+        .select = fs_slot_cycle,
+        .update = fs_slot_update,
+        .help = "Which slot the Color Creator writes, and loads that slot's "
+                "name. Type a different name in Look Name above.",
     },
     MENU_EOL,
 };

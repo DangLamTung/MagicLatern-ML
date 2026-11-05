@@ -4715,6 +4715,7 @@ static void fs_develop_run(void) {
   se_cam_set_pad32(film_sim_pad);
   se_cam_set_strength(film_sim_strength);
   se_cam_set_satboost(film_sim_satboost);
+  fs_yuvlook_set_satboost(film_sim_satboost);
   if (fs_level() == FS_LEVEL_RAW) {
     dev_err = se_cam_develop_raw(cr2, stk, tmp, 2, fs_bath_progress,
                                  fs_develop_note, NULL);
@@ -7009,7 +7010,15 @@ static MENU_UPDATE_FUNC(fs_replace_update) {
 }
 
 static MENU_UPDATE_FUNC(fs_satboost_update) {
+  static int last = -1;
   MENU_SET_VALUE("%d", film_sim_satboost);
+  fs_yuvlook_set_satboost(film_sim_satboost);
+  if (film_sim_satboost != last) {
+    /* Develop reads film_sim_satboost at develop time; the shot/LV tables are
+     * baked, so they only follow if the bake is asked to run again. */
+    last = film_sim_satboost;
+    fs_yuvlook_dirty = 1;
+  }
   MENU_SET_HELP("Saturation on top of every stock's own SAT line: 100 leaves "
                 "the recipe as written, 160 is roughly one and a half times as "
                 "saturated. Applies to developed files and to LiveView.");

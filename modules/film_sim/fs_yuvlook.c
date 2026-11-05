@@ -145,6 +145,12 @@ static int bake_cube_load(const char *path, se_lut3 *cube, uint16_t **hold)
     return 1;
 }
 
+/* Saturation slider for the bake. Develop has always honoured
+ * film.sim.satboost through se_cam_set_satboost(); the bake never did, so the
+ * slider moved the file and not the panel. */
+static int bake_satboost = 100;
+void fs_yuvlook_set_satboost(int s) { bake_satboost = (s < 20) ? 20 : (s > 200 ? 200 : s); }
+
 int fs_yuvlook_bake_lut(const char *stock_path, int strength, const char *lut_path)
 {
     se_stock st;
@@ -198,6 +204,7 @@ int fs_yuvlook_bake_lut(const char *stock_path, int strength, const char *lut_pa
 
     se_look_from_stock(&st, 1, &lk);
     se_look_set_strength(&lk, strength);
+    se_look_set_satboost(&lk, bake_satboost);
 
     {
         se_lut3 cube;

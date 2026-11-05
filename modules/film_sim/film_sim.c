@@ -2254,42 +2254,7 @@ static MENU_UPDATE_FUNC(fs_lv_clear_update) {
   MENU_SET_VALUE("%d fr", (int)fs_stat_frames);
 }
 
-static struct menu_entry film_sim_lv_menu[] = {
-    {
-        .name = "Framing",
-        .priv = &film_sim_aspect,
-        .max = FS_ASPECT_COUNT - 1,
-        .choices = fs_aspect_names,
-        .update = fs_aspect_update,
-        .help = "Black bars on LiveView where the frame will be cropped. Canon "
-                "writes the JPEG at the full 3:2 sensor size and a module cannot "
-                "change that, so the crop is done afterwards; the bars are there "
-                "so nothing important is composed outside it.",
-    },
-    {
-        .name = "LiveView Frame",
-        .select = menu_open_submenu,
-        .icon_type = IT_ACTION,
-        .help = "Filter, frame rate and the in-camera style.",
-        .children = film_sim_liveview_children,
-    },
-    {
-        .name = "Canister Art",
-        .priv = &film_sim_art,
-        .max = 1,
-        .help = "Photographs of the film from ML/FILMSIM/CANS.DAT. Off draws "
-                "the cassette instead, which needs no file at all.",
-    },
-    {
-        .name = "Clear Canon Overlays",
-        .select = fs_lv_clear_overlays,
-        .update = fs_lv_clear_update,
-        .icon_type = IT_ACTION,
-        .help = "The grade cannot run while Canon's own LV overlays have the "
-                "panel. SET sends INFO once, then reports the switch.",
-    },
-    MENU_EOL,
-};
+
 
 /* ---------------------------------------------------------------- film sim
  *
@@ -6886,7 +6851,7 @@ static struct menu_entry fs_menu_fuji[] = {
         .help = "Fuji's COLOR CHROME FX BLUE: the same, restricted to blues.",
     },
     {
-        .name = "Grain",
+        .name = "Grain Effect",
         .priv = &fs_fuji.grain,
         .min = 0, .max = 2,
         .choices = fs_level_names,
@@ -6942,6 +6907,114 @@ static struct menu_entry fs_menu_fuji[] = {
     MENU_EOL,
 };
 
+static struct menu_entry fs_menu_look[] = {
+    {
+        .name = "Strength",
+        .priv = &film_sim_strength,
+        .max = 100,
+        .help = "How much of the stock's look is applied.",
+    },
+    {
+        .name = "Saturation",
+        .priv = &film_sim_satboost,
+        .min = 20,
+        .max = 200,
+        .update = fs_satboost_update,
+        .help = "Saturation on top of every stock's own SAT line: 100 leaves "
+                "the recipe as written, 160 is about one and a half times as "
+                "saturated. Applies to developed files and to LiveView.",
+    },
+    {
+        .name = "Grain",
+        .priv = &film_sim_grain,
+        .max = 100,
+        .help = "Grain amount on top of what the stock itself asks for.",
+    },
+    {
+        .name = "Pad to 3:2",
+        .priv = &film_sim_pad,
+        .max = 1,
+        .update = fs_pad_update,
+        .help = "Framings wider than 3:2 (16:9, 65:24 XPan) are written into a "
+                "3:2 frame with black bars, so the body shows the whole frame "
+                "instead of something that is not what you composed.",
+    },
+    {
+        .name = "Framing",
+        .priv = &film_sim_aspect,
+        .max = FS_ASPECT_COUNT - 1,
+        .choices = fs_aspect_names,
+        .update = fs_aspect_update,
+        .help = "Black bars on LiveView where the frame will be cropped. Canon "
+                "writes the JPEG at the full 3:2 sensor size and a module cannot "
+                "change that, so the crop is done afterwards; the bars are there "
+                "so nothing important is composed outside it.",
+    },
+    MENU_EOL,
+};
+
+static struct menu_entry fs_menu_live[] = {
+    {
+        .name = "LiveView 3D",
+        .priv = &film_sim_lv3d,
+        .max = 1,
+        .help = "Grade the preview through a joint (y,u,v) lattice baked from "
+                "the stock instead of the preset tables: 3.3 levels off the "
+                "develop against 8.8, with 5x less chroma error (host test "
+                "se/hosttest/lv3d.c). Costs about 3.3x the table lookups, so "
+                "watch FILMSIM.LOG's grade_ms before leaving it on.",
+    },
+    {
+        .name = "LiveView Frame",
+        .select = menu_open_submenu,
+        .icon_type = IT_ACTION,
+        .help = "Filter, frame rate and the in-camera style.",
+        .children = film_sim_liveview_children,
+    },
+    {
+        .name = "Canister Art",
+        .priv = &film_sim_art,
+        .max = 1,
+        .help = "Photographs of the film from ML/FILMSIM/CANS.DAT. Off draws "
+                "the cassette instead, which needs no file at all.",
+    },
+    {
+        .name = "Clear Canon Overlays",
+        .select = fs_lv_clear_overlays,
+        .update = fs_lv_clear_update,
+        .icon_type = IT_ACTION,
+        .help = "The grade cannot run while Canon's own LV overlays have the "
+                "panel. SET sends INFO once, then reports the switch.",
+    },
+    MENU_EOL,
+};
+
+static struct menu_entry fs_menu_recipes[] = {
+    {
+        .name = "Fuji Recipe",
+        .select = menu_open_submenu,
+        .icon_type = IT_ACTION,
+        .help = "A bundle of Fuji's IMAGE QUALITY SETTING items, saved as a "
+                ".fs -- the C1..C7 slot equivalent.",
+        .children = fs_menu_fuji,
+    },
+    {
+        .name = "Color Creator",
+        .select = fs_creator_trigger,
+        .icon_type = IT_ACTION,
+        .help = "Twelve wedges, 30 degrees apart, plus highlight/shadow. "
+                "Saves ML/FILM/WHEEL.fs and reloads the shelf.",
+    },
+    {
+        .name = "Fuji WB Shift",
+        .select = fs_wb_trigger,
+        .icon_type = IT_ACTION,
+        .help = "A grid of Blue/Amber against Green/Magenta, written into the "
+                "camera's own white balance the way a Fuji recipe does.",
+    },
+    MENU_EOL,
+};
+
 static struct menu_entry film_sim_menu[] = {
     {
         .name = "Film Shelf",
@@ -6956,15 +7029,6 @@ static struct menu_entry film_sim_menu[] = {
         .icon_type = IT_ACTION,
         .help = "Show the last developed frame on the camera's own screen. "
                 "MENU or PLAY closes it.",
-    },
-    {
-        .name = "Pad to 3:2",
-        .priv = &film_sim_pad,
-        .max = 1,
-        .update = fs_pad_update,
-        .help = "Framings wider than 3:2 (16:9, 65:24 XPan) are written into a "
-                "3:2 frame with black bars, so the body shows the whole frame "
-                "instead of something that is not what you composed.",
     },
     {
         .name = "Level",
@@ -6995,68 +7059,25 @@ static struct menu_entry film_sim_menu[] = {
         .help = "Tick this photo for the develop set. Q: clear the set.",
     },
     {
-        .name = "Strength",
-        .priv = &film_sim_strength,
-        .max = 100,
-        .help = "How much of the stock's look is applied.",
-    },
-    {
-        .name = "Saturation",
-        .priv = &film_sim_satboost,
-        .min = 20,
-        .max = 200,
-        .update = fs_satboost_update,
-        .help = "Saturation on top of every stock's own SAT line: 100 leaves "
-                "the recipe as written, 160 is about one and a half times as "
-                "saturated. Applies to developed files and to LiveView.",
-    },
-    {
-        .name = "Framing",
-        .priv = &film_sim_aspect,
-        .max = FS_ASPECT_COUNT - 1,
-        .choices = fs_aspect_names,
-        .update = fs_aspect_update,
-        .help = "Black bars on LiveView showing the crop. The camera's own JPEG "
-                "stays the full 3:2 frame -- crop afterwards. Files written by "
-                "Develop are cropped for real.",
-    },
-    {
-        .name = "Grain",
-        .priv = &film_sim_grain,
-        .max = 100,
-        .help = "Grain amount on top of what the stock itself asks for.",
-    },
-    {
-        .name = "LiveView 3D",
-        .priv = &film_sim_lv3d,
-        .max = 1,
-        .help = "Grade the preview through a joint (y,u,v) lattice baked from "
-                "the stock instead of the preset tables: 3.3 levels off the "
-                "develop against 8.8, with 5x less chroma error (host test "
-                "se/hosttest/lv3d.c). Costs about 3.3x the table lookups, so "
-                "watch FILMSIM.LOG's grade_ms before leaving it on.",
-    },
-    {
-        .name = "Fuji WB Shift",
-        .select = fs_wb_trigger,
-        .icon_type = IT_ACTION,
-        .help = "A grid of Blue/Amber against Green/Magenta, written into the "
-                "camera's own white balance the way a Fuji recipe does.",
-    },
-    {
-        .name = "Fuji Recipe",
+        .name = "Look",
         .select = menu_open_submenu,
         .icon_type = IT_ACTION,
-        .help = "A bundle of Fuji's IMAGE QUALITY SETTING items, saved as a "
-                ".fs -- the C1..C7 slot equivalent.",
-        .children = fs_menu_fuji,
+        .help = "Strength, saturation, grain, padding and framing.",
+        .children = fs_menu_look,
     },
     {
-        .name = "Color Creator",
-        .select = fs_creator_trigger,
+        .name = "Recipes",
+        .select = menu_open_submenu,
         .icon_type = IT_ACTION,
-        .help = "Twelve wedges, 30 degrees apart, plus highlight/shadow. "
-                "Saves ML/FILM/WHEEL.fs and reloads the shelf.",
+        .help = "Fuji recipe page, the 12-colour creator and the WB grid.",
+        .children = fs_menu_recipes,
+    },
+    {
+        .name = "LiveView",
+        .select = menu_open_submenu,
+        .icon_type = IT_ACTION,
+        .help = "Preview grading, frame and overlay options.",
+        .children = fs_menu_live,
     },
     {
         .name = "Develop",
@@ -7081,6 +7102,8 @@ static struct menu_entry film_sim_menu[] = {
     },
     MENU_EOL,
 };
+
+
 
 /*
  * Why the LiveView grade needs its own eyes.
@@ -7431,8 +7454,13 @@ static unsigned int film_sim_init() {
   /* COUNT() includes the MENU_EOL terminator, whose .name is NULL. ML's
    * check_duplicate_entries() asserts on that during menu_redraw_task, which
    * killed the menu task and with it every handler behind it. */
+  /* One top-level menu, not two.
+   *
+   * This module used to publish "Film Dev" (18 rows) and "Film LV" (4), with
+   * Framing written into both -- two places to change one setting, and two
+   * entries in ML's menu bar for one module. Everything is reachable from the
+   * one list below, one level deeper. */
   menu_add("Film Dev", film_sim_menu, COUNT(film_sim_menu) - 1);
-  menu_add("Film LV", film_sim_lv_menu, COUNT(film_sim_lv_menu) - 1);
   if (fs_test_flag()) {
     task_create("fs_test", 0x1e, 0x4000, fs_test_task, 0);
   }

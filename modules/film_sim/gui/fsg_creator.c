@@ -58,7 +58,51 @@ int fs_creator_wedge_rgb(int i)
     return (r << 16) | (g << 8) | b;
 }
 
+void fs_creator_register_palette(void)
+{
+    int pal[FS_CREATOR_WEDGES], i;
+    for (i = 0; i < FS_CREATOR_WEDGES; i++) pal[i] = fs_creator_wedge_rgb(i);
+    fsg_pal(pal, FS_CREATOR_WEDGES);
+}
+
 /* ---- small drawing helpers over fills -------------------------------- */
+
+static int isqrt_i(int v)
+{
+    int r = 0;
+    while ((r + 1) * (r + 1) <= v) r++;
+    return r;
+}
+
+/* A filled circle, one row per fill. Used for the beads: 1-px outlines on a
+ * dark disc read as a wireframe diagram, which is what the first version
+ * looked like. */
+static void circle_fill(int cx, int cy, int r, int colour)
+{
+    int dy;
+    for (dy = -r; dy <= r; dy++) {
+        int half = isqrt_i(r * r - dy * dy);
+        fsg_fill(cx - half, cy + dy, half * 2 + 1, 1, colour);
+    }
+}
+
+/* The track the beads sit on: an annulus drawn a row at a time. */
+static void ring_band(int cx, int cy, int r0, int r1, int colour)
+{
+    int dy;
+    for (dy = -r1; dy <= r1; dy++) {
+        int outer, inner;
+        if (r1 * r1 - dy * dy < 0) continue;
+        outer = isqrt_i(r1 * r1 - dy * dy);
+        inner = (r0 * r0 > dy * dy) ? isqrt_i(r0 * r0 - dy * dy) : 0;
+        if (inner > 0) {
+            fsg_fill(cx - outer, cy + dy, outer - inner, 1, colour);
+            fsg_fill(cx + inner + 1, cy + dy, outer - inner, 1, colour);
+        } else {
+            fsg_fill(cx - outer, cy + dy, outer * 2 + 1, 1, colour);
+        }
+    }
+}
 
 static void rect_outline(int x, int y, int w, int h, int c)
 {
@@ -106,6 +150,8 @@ static const int sin30[12] = { 0, 500, 866, 1000, 866, 500,
 #define CREATOR_R_IN    58
 #define CREATOR_BEAD_R  14      /* half the largest bead box                */
 #define CREATOR_DISC_BG FSG_PANEL_DARK
+#define CREATOR_BAND_R0 (CREATOR_R_BEAD - 16)
+#define CREATOR_BAND_R1 (CREATOR_R_BEAD + 16)
 
 static void ring_pos(int cx, int cy, int r, int i, int *ox, int *oy)
 {
@@ -160,20 +206,21 @@ static void footer(const char *keys)
 /* One wedge's bead. `sel` draws the halo and the inner disc. */
 static void draw_one_bead(const fs_creator_t *c, int i, int px, int py)
 {
-  int col = fs_creator_wedge_rgb(i);
+  int col = FSG_PIX(i);          /* palette slot, NOT an RGB value */
   int neutral = (c->sat[i] == 100 && c->rot[i] == 0 && c->lum[i] == 100);
 
   if (i == c->sel) {
-    bead(px, py, 27, FSG_AMBER);
-    bead(px, py, 21, FSG_BG_DEEP);
-    bead(px, py, 17, col);
+    circle_fill(px, py, 15, FSG_AMBER);   /* halo */
+    circle_fill(px, py, 12, FSG_BG_DEEP);
+    circle_fill(px, py, 10, col);
   } else if (neutral) {
-    bead(px, py, 19, FSG_BG_DEEP);
-    rect_outline(px - 9, py - 9, 19, 19, col);
-    rect_outline(px - 8, py - 8, 17, 17, col);
+    /* untouched: dark centre with a coloured ring, so a screen full of them
+     * reads as "nothing authored yet" at a glance */
+    circle_fill(px, py, 10, col);
+    circle_fill(px, py, 7, CREATOR_DISC_BG);
   } else {
-    bead(px, py, 19, col);
-    rect_outline(px - 10, py - 10, 21, 21, FSG_WHITE);
+    circle_fill(px, py, 10, FSG_WHITE);
+    circle_fill(px, py, 9, col);
   }
 }
 
@@ -213,18 +260,34 @@ void fsg_draw_creator_beads(const fs_creator_t *c, int offset_q16,
     ny[i] = CREATOR_CY - (CREATOR_R_BEAD * s10) / 1000;
   }
 
-  /* erase the previous frame, then draw the new one */
+  /*
+   * Erase, then put the track back.
+   *
+   * A bead sits ON the track band, so a flat box of disc colour leaves a dark
+   * square through it -- the first spinning frame came out with a dashed
+   * ring. Redrawing the whole band costs ~270 row fills and is simpler, and
+   * still cheaper, than classifying every pixel of twelve erase boxes.
+   */
   if (sp->valid) {
     for (i = 0; i < FS_CREATOR_WEDGES; i++)
-      fsg_fill(sp->x[i] - CREATOR_BEAD_R, sp->y[i] - CREATOR_BEAD_R,
-               29, 29, CREATOR_DISC_BG);
+      fsg_fill(sp->x[i] - 16, sp->y[i] - 16, 33, 33, CREATOR_DISC_BG);
+    ring_band(CREATOR_CX, CREATOR_CY, CREATOR_BAND_R0, CREATOR_BAND_R1,
+              FSG_PANEL_HI);
   }
   for (i = 0; i < FS_CREATOR_WEDGES; i++)
     draw_one_bead(c, i, nx[i], ny[i]);
 
-  /* the pointer the ring turns past, redrawn because beads cross it */
-  fsg_fill(CREATOR_CX - 1, CREATOR_CY - CREATOR_R_OUT - 2, 3, 12, FSG_AMBER);
-  fsg_fill(CREATOR_CX - 4, CREATOR_CY - CREATOR_R_OUT - 6, 9, 3, FSG_AMBER);
+  /*
+   * The pointer the ring turns past. Redrawn every frame because a bead
+   * sliding along the track passes over it.
+   */
+  {
+    int y0 = CREATOR_CY - CREATOR_R_OUT + 2;
+    fsg_fill(CREATOR_CX - 7, y0, 15, 3, FSG_AMBER);
+    fsg_fill(CREATOR_CX - 5, y0 + 3, 11, 3, FSG_AMBER);
+    fsg_fill(CREATOR_CX - 3, y0 + 6, 7, 3, FSG_AMBER);
+    fsg_fill(CREATOR_CX - 1, y0 + 9, 3, 3, FSG_AMBER);
+  }
 
   for (i = 0; i < FS_CREATOR_WEDGES; i++) { sp->x[i] = nx[i]; sp->y[i] = ny[i]; }
   sp->valid = 1;
@@ -244,8 +307,11 @@ void fsg_draw_creator(const fs_creator_t *c)
     snprintf(right, sizeof right, "%d / %d", c->sel + 1, FS_CREATOR_WEDGES);
     header(c->stock, right, c->sel);
 
-    /* the wheel body, then a dimmer ring so the beads sit on something */
+    fs_creator_register_palette();
+
+    /* the wheel body, then the track the beads sit on, then a dark hub */
     disc(cx, cy, r_out, FSG_PANEL_DARK);
+    ring_band(cx, cy, CREATOR_BAND_R0, CREATOR_BAND_R1, FSG_PANEL_HI);
     disc(cx, cy, r_in - 8, FSG_BG_DEEP);
 
     /*

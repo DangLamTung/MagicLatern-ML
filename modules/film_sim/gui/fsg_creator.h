@@ -72,8 +72,17 @@ void fsg_draw_tone(const fs_creator_t *c);
 int fs_creator_write(const fs_creator_t *c, char *buf, int cap,
                      const char *name);
 
-/* Wedge 0..11 -> its name, and its nominal colour as 0xRRGGBB. */
+/*
+ * Wedge 0..11 -> its name, and its nominal colour.
+ *
+ * The colour is a PALETTE ENTRY, not an RGB value: the panel has 175 indices
+ * and ml_color() sends anything it does not recognise to pure white, so the
+ * first version drew twelve white squares on the camera while the desktop
+ * preview showed twelve colours. fs_creator_register_palette() must be called
+ * before drawing (fsg_draw_creator does it for you).
+ */
 const char *fs_creator_wedge_name(int i);
 int         fs_creator_wedge_rgb(int i);
+void        fs_creator_register_palette(void);
 
 #endif

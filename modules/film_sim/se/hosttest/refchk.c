@@ -19,6 +19,11 @@ static const int cc24[24][3] = {
   {243,243,242},{200,200,200},{160,160,160},{122,122,121},{85,85,85},{52,52,52}
 };
 
+static double srgb_to_linear(double v)
+{
+  return (v > 0.04045) ? pow((v + 0.055) / 1.055, 2.4) : v / 12.92;
+}
+
 static void rgb2lab(double r, double g, double b, double *L, double *A, double *B)
 {
   double v[3]; int i;
@@ -91,8 +96,14 @@ int main(int argc, char **argv)
   double sum = 0, worst = 0;
   int worst_i = 0;
 
+  /* The reference cube's input domain decides everything. abpy's Fuji
+   * profiles want LINEAR scene values; GlassMeter's say "input/output:
+   * sRGB encoded" outright. Mixing the two produced numbers that were
+   * wrong by 15 levels, so the caller now has to say which it is. */
+  int linear_in = 1;
+  if (argc >= 4 && !strcmp(argv[3], "display")) linear_in = 0;
   if (argc < 3) {
-    fprintf(stderr, "usage: %s stock.fs reference.cube\n", argv[0]);
+    fprintf(stderr, "usage: %s stock.fs reference.cube [display]\n", argv[0]);
     return 2;
   }
 
@@ -127,12 +138,27 @@ int main(int argc, char **argv)
   for (i = 0; i < 24; i++) {
     double l1[3], l2[3], d;
     uint16_t p[3];
-    p[0] = (uint16_t)(cc24[i][0] * 257);
-    p[1] = (uint16_t)(cc24[i][1] * 257);
-    p[2] = (uint16_t)(cc24[i][2] * 257);
+    /*
+     * The reference cubes expect LINEAR input: abpy's FujifilmCameraProfiles
+     * README says "the cube LUTs are intended to be applied to an image with
+     * linear contrast. A linear camera profile is required for a correct
+     * result." Feeding display-encoded sRGB made every number this tool
+     * printed meaningless -- and black/white still looked right, because
+     * both ends clamp, which is why a bad test passed.
+     */
+    if (linear_in) {
+      p[0] = (uint16_t)(srgb_to_linear(cc24[i][0] / 255.0) * 65535.0);
+      p[1] = (uint16_t)(srgb_to_linear(cc24[i][1] / 255.0) * 65535.0);
+      p[2] = (uint16_t)(srgb_to_linear(cc24[i][2] / 255.0) * 65535.0);
+    } else {
+      p[0] = (uint16_t)(cc24[i][0] * 257);
+      p[1] = (uint16_t)(cc24[i][1] * 257);
+      p[2] = (uint16_t)(cc24[i][2] * 257);
+    }
     se_lut3_apply_row(&cube, p, 1);
     rgb2lab(g_out[i * 3 + 0], g_out[i * 3 + 1], g_out[i * 3 + 2], &l1[0], &l1[1], &l1[2]);
     rgb2lab(p[0] / 257.0, p[1] / 257.0, p[2] / 257.0, &l2[0], &l2[1], &l2[2]);
+    (void)0;
     d = de00(l1, l2);
     sum += d;
     if (d > worst) { worst = d; worst_i = i; }

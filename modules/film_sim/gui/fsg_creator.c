@@ -512,7 +512,10 @@ void fsg_draw_fx(const fs_creator_t *c)
         bar_bipolar(24, y + 18, 640, 16, v, lo[i], hi[i], lo[i],
                     i == c->field ? FSG_AMBER : FSG_RED_MID, i == c->field);
     }
-    if (c->saved) {
+    if (c->save_err) {
+        fsg_text(24, 386, FSG_T_SMALL, FSG_RED_MID, FSG_BG,
+                 "%s", "SAVE FAILED - see FILMSIM.LOG");
+    } else if (c->saved) {
         char line[48];
         snprintf(line, sizeof line, "SAVED ML/FILM/%s.fs",
                  c->saved_name ? c->saved_name : "WHEEL");
@@ -626,7 +629,12 @@ void fsg_draw_creator(const fs_creator_t *c)
         }
 
         /* Save status badge */
-        if (c->saved) {
+        if (c->save_err) {
+            fsg_fill(ix, y, iw, 26, FSG_RED_DEEP);
+            rect_outline(ix, y, iw, 26, FSG_RED_MID);
+            fsg_text(ix + 10, y + 7, FSG_T_SMALL, FSG_WHITE, FSG_RED_DEEP,
+                     "%s", "SAVE FAILED - see FILMSIM.LOG");
+        } else if (c->saved) {
             char line[48];
             snprintf(line, sizeof line, "SAVED ML/FILM/%s.fs",
                      c->saved_name ? c->saved_name : "WHEEL");
@@ -769,7 +777,13 @@ void fsg_draw_tone(const fs_creator_t *c)
                  FSG_WHITE, FSG_PANEL, "%s", value);
         y += 28;
 
-        if (c->saved) {
+        if (c->save_err) {
+            snprintf(value, sizeof value, "%s", "SAVE FAILED - FILMSIM.LOG");
+            fsg_fill(ix, y, iw, 26, FSG_RED_DEEP);
+            rect_outline(ix, y, iw, 26, FSG_RED_MID);
+            fsg_text(ix + 10, y + 7, FSG_T_SMALL, FSG_WHITE, FSG_RED_DEEP,
+                     "%s", value);
+        } else if (c->saved) {
             snprintf(value, sizeof value, "SAVED %s.fs",
                      c->saved_name ? c->saved_name : "WHEEL");
             fsg_fill(ix, y, iw, 26, FSG_GREEN_DARK);

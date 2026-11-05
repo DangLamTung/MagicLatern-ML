@@ -49,6 +49,13 @@ typedef struct
      * profile is saved". `saved` is cleared by the next value change.
      */
     int         saved;
+    /*
+     * Non-zero when the last save failed. It has to live on this struct and be
+     * drawn by this screen: the save task used to report with NotifyBox(), and
+     * the creator's own repaint erased it before anyone saw it -- which is why
+     * a failed save looked like a save that did nothing.
+     */
+    int         save_err;
     const char *slot_name;   /* the file PLAY writes, e.g. "WHEEL2"     */
     const char *saved_name;  /* what was just written, once it exists   */
 

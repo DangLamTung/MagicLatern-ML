@@ -5073,6 +5073,8 @@ static void fs_creator_save_task(void *unused) {
     NotifyBox(1800, "Creator: recipe did not fit");
     fs_log("creator: format failed");
     fs_log_flush();
+    fs_creator.save_err = 1;
+    fs_creator_dirty = 1;
     fs_creator_saving = 0;
     return;
   }
@@ -5086,6 +5088,8 @@ static void fs_creator_save_task(void *unused) {
       NotifyBox(1800, "Creator: write failed");
       fs_log("creator: writing '%s' gave %d of %d bytes", path, wrote, n);
       fs_log_flush();
+      fs_creator.save_err = 1;
+      fs_creator_dirty = 1;
       /* Without this the flag stays set and every later save is refused by
        * fs_creator_save_trigger's `if (!fs_creator_saving)`, silently, until
        * the camera is restarted. */
@@ -5106,6 +5110,7 @@ static void fs_creator_save_task(void *unused) {
   snprintf(fs_creator_saved_name, sizeof fs_creator_saved_name, "%.8s", name);
   fs_creator.saved_name = fs_creator_saved_name;
   fs_creator.saved = 1;
+  fs_creator.save_err = 0;
   beep_times(1);
   fs_creator.dirty = 0;
   fs_creator_saving = 0;
@@ -5174,7 +5179,13 @@ static int fs_creator_run(void) {
        * happens between paints, not under the lock. */
       if (!fs_creator_saving) {
         fs_creator_saving = 1;
-        task_create("fs_creator_save", 0.5, 0x4000, fs_creator_save_task, 0);
+        if (!task_create("fs_creator_save", 0x1e, 0x4000,
+                       fs_creator_save_task, 0)) {
+          fs_creator_saving = 0;
+          fs_creator.save_err = 1;
+          fs_log("creator: task_create failed for the save task");
+          fs_log_flush();
+        }
       }
       fs_creator_dirty = 1;
     }
@@ -5285,7 +5296,7 @@ static int fs_wb_run(void) {
       /* A property write blocks on the ICU round-trip, so it cannot happen in
        * the key callback or under the BMP lock that fs_paint() holds. */
       fs_wb_applied = 0;
-      task_create("fs_wb_apply", 0.5, 0x1000, fs_wb_apply_task, 0);
+      task_create("fs_wb_apply", 0x1e, 0x1000, fs_wb_apply_task, 0);
       fs_wb_dirty = 1;
     }
     if (fs_key_count == kc0 && get_ms_clock() - t0 > 30000) {
@@ -5362,7 +5373,7 @@ static MENU_SELECT_FUNC(fs_fuji_save_trigger) {
   fs_fuji_ensure_init();
   if (!fs_fuji_save) {
     fs_fuji_save = 1;
-    task_create("fs_fuji_save", 0.5, 0x2000, fs_fuji_save_task, 0);
+    task_create("fs_fuji_save", 0x1e, 0x2000, fs_fuji_save_task, 0);
   }
 }
 

@@ -1005,10 +1005,15 @@ static void fs_sync() {
   }
   /* Framing is an aspect mode: the hook needs it even when nothing else moved.
    *
-   * But the bars must describe the FILE. Canon writes its own JPEG at 3:2 and a
-   * module cannot crop it, so a bar that promises 65:24 while the card gets 3:2
-   * is a lie the user composes against. They only tell the truth when the shot
-   * is developed and replaces Canon's JPEG. */
+   * Two different bar sets use this number and they are gated differently:
+   *
+   *  - fs_aspect_bars() draws the LiveView overlay and is NOT gated on
+   *    replace: it is a composition guide and writes no pixels to the file,
+   *    so you see the frame either way.
+   *  - fs_yuvhook_bars() burns black bars into Canon's in-shutter YUV, which
+   *    is the JPEG on the card. With replace off that JPEG stays a clean full
+   *    3:2 frame -- no bars burned in -- and with replace on the bars are
+   *    redundant because our own cropped develop replaces the file. */
   fs_yuvhook_bars(film_sim_replace ? film_sim_aspect : 0);
 
   /*

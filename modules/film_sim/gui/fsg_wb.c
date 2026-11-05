@@ -52,7 +52,7 @@ static void header(const char *right)
     fsg_fill(0, 0, 6, 44, FSG_AMBER);
     fsg_text(20, 9, FSG_T_MED, FSG_AMBER, FSG_RED_DEEP, "FUJI WB SHIFT");
     fsg_text(20, 30, FSG_T_SMALL, 0xE8C9A0, FSG_RED_DEEP,
-             "WRITTEN TO THE CAMERA'S OWN WHITE BALANCE");
+             "AN OFFSET ON TOP OF THE STOCK'S OWN BALANCE");
     fsg_text(536, 15, FSG_T_MED, FSG_WHITE, FSG_RED_DEEP, "%s", right);
 }
 
@@ -102,22 +102,44 @@ void fsg_draw_wb(const fs_wb_t *w)
     fsg_text(gx + GRID_PX + 8, gy + GRID_PX / 2 - 6, FSG_T_SMALL, FSG_GREY, FSG_BG,
              "AMBER");
 
-    /* readouts */
+    /*
+     * Three numbers, because there are three of them and confusing any two is
+     * the whole failure mode: the OFFSET this screen sets, the stock's own
+     * shift, and what the camera therefore holds. Showing the offset alone
+     * was misleading -- the camera gets offset + stock.
+     */
     {
         const int x = gx + GRID_PX + 92;
-        int y = gy + 8;
+        int y = gy + 4;
+        int abs_ba = w->stock_ba + w->ba;
+        int abs_gm = w->stock_gm + w->gm;
 
-        fsg_text(x, y, FSG_T_SMALL, FSG_GREY, FSG_BG, "B / A");
+        if (abs_ba > 9) abs_ba = 9;
+        if (abs_ba < -9) abs_ba = -9;
+        if (abs_gm > 9) abs_gm = 9;
+        if (abs_gm < -9) abs_gm = -9;
+
+        fsg_text(x, y, FSG_T_SMALL, FSG_GREY, FSG_BG, "OFFSET");
         snprintf(buf, sizeof buf, "%+d", w->ba);
-        fsg_text(x, y + 20, FSG_T_LARGE, FSG_AMBER, FSG_BG, "%s", buf);
-
-        fsg_text(x, y + 70, FSG_T_SMALL, FSG_GREY, FSG_BG, "G / M");
+        fsg_text(x, y + 16, FSG_T_LARGE, FSG_AMBER, FSG_BG, "%s", buf);
         snprintf(buf, sizeof buf, "%+d", w->gm);
-        fsg_text(x, y + 90, FSG_T_LARGE, FSG_AMBER, FSG_BG, "%s", buf);
+        fsg_text(x + 66, y + 16, FSG_T_LARGE, FSG_AMBER, FSG_BG, "%s", buf);
+
+        fsg_text(x, y + 56, FSG_T_SMALL, FSG_GREY, FSG_BG, "STOCK");
+        snprintf(buf, sizeof buf, "%+d", w->stock_ba);
+        fsg_text(x, y + 72, FSG_T_MED, FSG_GREY, FSG_BG, "%s", buf);
+        snprintf(buf, sizeof buf, "%+d", w->stock_gm);
+        fsg_text(x + 66, y + 72, FSG_T_MED, FSG_GREY, FSG_BG, "%s", buf);
+
+        fsg_text(x, y + 104, FSG_T_SMALL, FSG_GREY, FSG_BG, "CAMERA GETS");
+        snprintf(buf, sizeof buf, "%+d", abs_ba);
+        fsg_text(x, y + 120, FSG_T_MED, FSG_WHITE, FSG_BG, "%s", buf);
+        snprintf(buf, sizeof buf, "%+d", abs_gm);
+        fsg_text(x + 66, y + 120, FSG_T_MED, FSG_WHITE, FSG_BG, "%s", buf);
 
         /* 5 mireks a unit, the number ML's own menu quotes */
-        snprintf(buf, sizeof buf, "%+d mired", w->ba * 5);
-        fsg_text(x, y + 140, FSG_T_SMALL, FSG_GREY_DIM, FSG_BG, "%s", buf);
+        snprintf(buf, sizeof buf, "%+d mired", abs_ba * 5);
+        fsg_text(x, y + 152, FSG_T_SMALL, FSG_GREY_DIM, FSG_BG, "%s", buf);
 
         if (w->moved && !w->applied)
             fsg_text(x, y + 186, FSG_T_SMALL, FSG_AMBER, FSG_BG, "PRESS SET");

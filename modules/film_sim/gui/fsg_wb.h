@@ -15,8 +15,10 @@
 
 typedef struct
 {
-    int ba;          /* -9..+9  blue (neg) .. amber (pos)        */
-    int gm;          /* -9..+9  green (neg) .. magenta (pos)     */
+    int ba;          /* -9..+9  offset the user is setting       */
+    int gm;
+    int stock_ba;    /* the base stock's own shift, which this    */
+    int stock_gm;    /* one is added to                           */
     int moved;       /* the crosshair has been moved            */
     int applied;     /* the current pair is in the camera        */
     int apply_ms;    /* age of the last APPLY, for the flash-off */

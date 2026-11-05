@@ -1975,6 +1975,8 @@ static int fs_inject_user1(int preset, const char *name) {
   return fs_stat_inject_rc;
 }
 
+static void fs_stock_wb_shift(int *ba, int *gm);
+
 /*
  * Push the recipe's WB shift into the camera.
  *
@@ -1988,13 +1990,20 @@ static int fs_inject_user1(int preset, const char *name) {
  */
 static void fs_push_wb_shift(void)
 {
-  int ba = fs_clamp_i(film_sim_wbs_ba, -9, 9) & 0xFF;
-  int gm = fs_clamp_i(film_sim_wbs_gm, -9, 9) & 0xFF;
+  int sba, sgm, ba, gm;
+
+  fs_stock_wb_shift(&sba, &sgm);
+  ba = fs_clamp_i(sba + fs_clamp_i(film_sim_wbs_ba, -9, 9), -9, 9) & 0xFF;
+  gm = fs_clamp_i(sgm + fs_clamp_i(film_sim_wbs_gm, -9, 9), -9, 9) & 0xFF;
 
   prop_request_change(PROP_WBS_BA, &ba, 4);
   prop_request_change(PROP_WBS_GM, &gm, 4);
-  fs_log("fuji: WB shift B/A %+d, G/M %+d written to the camera",
-         (int)film_sim_wbs_ba, (int)film_sim_wbs_gm);
+  /* both numbers, because the screen shows the offset and the camera holds
+   * the sum: if these disagree with the screen, that is the bug to chase */
+  fs_log("fuji: WB shift stock B/A %+d G/M %+d, offset B/A %+d G/M %+d "
+         "-> camera B/A %+d G/M %+d",
+         sba, sgm, (int)film_sim_wbs_ba, (int)film_sim_wbs_gm,
+         (int)(signed char)ba, (int)(signed char)gm);
   fs_log_flush();
 }
 
@@ -2339,6 +2348,18 @@ static CONFIG_INT("film.sim.wb_shift", film_sim_wb_shift,
 static CONFIG_INT("film.sim.lock_iso", film_sim_lock_iso,
                   0); /* Lock ISO to film stock speed */
 
+static void fs_stock_wb_shift(int *ba, int *gm)
+{
+  film_style_t st;
+  int count = (film_active_count > 0) ? film_active_count : FILM_COUNT;
+  int idx = fs_clamp_i(film_sim_stock, 0, count - 1);
+
+  film_active_to_style(idx, film_sim_dev, &st);
+  *ba = st.wbs_ba;
+  *gm = st.wbs_gm;
+}
+
+
 static int fs_active_slot(void) {
   int raw = lens_info.raw_picstyle;
   if (raw == 0x21)
@@ -2460,8 +2481,23 @@ static int fs_apply_film_now(void) {
     if (st.kelvin > 0) {
       lens_set_kelvin(st.kelvin);
     }
-    lens_set_wbs_ba(st.wbs_ba);
-    lens_set_wbs_gm(st.wbs_gm);
+    /*
+     * The stock's OWN shift, plus the creator's offset.
+     *
+     * These two lines used to write st.wbs_ba alone, which meant a shift made
+     * on the WB screen survived only until the next stock was applied -- the
+     * screen was replacing the recipe's balance rather than sitting on top of
+     * it. Every stock in film_table.h carries a balance of its own (blue/amber
+     * and green/magenta, part of the emulsion), so an edit has to be a DELTA
+     * against that, which is also what a Fuji recipe is: custom values layered
+     * on a base simulation.
+     */
+    {
+      int ba = fs_clamp_i(st.wbs_ba + fs_clamp_i(film_sim_wbs_ba, -9, 9), -9, 9);
+      int gm = fs_clamp_i(st.wbs_gm + fs_clamp_i(film_sim_wbs_gm, -9, 9), -9, 9);
+      lens_set_wbs_ba(ba);
+      lens_set_wbs_gm(gm);
+    }
   }
 
   /* Lock camera ISO to the film stock's rated speed */
@@ -4897,6 +4933,7 @@ static int fs_creator_run(void) {
 
 static void fs_wb_render(void)
 {
+  fs_stock_wb_shift(&fs_wb.stock_ba, &fs_wb.stock_gm);
   fs_wb.ba = fs_clamp_i(film_sim_wbs_ba, -9, 9);
   fs_wb.gm = fs_clamp_i(film_sim_wbs_gm, -9, 9);
   fs_wb.moved  = (fs_wb.ba || fs_wb.gm);

@@ -136,17 +136,6 @@ static void parse_vec(sc *t, float *out, int n)
 }
 
 /*
- * A per-hue vector, honouring the older six-value form.
- *
- * Six values used to mean R, Y, G, C, B, M with the engine interpolating in
- * between; now there are twelve knots at half that spacing. Expanding by
- * inserting the average of each neighbouring pair reproduces the old curve,
- * because that is exactly what the old interpolation did between its knots.
- * Verified against all 25 hue vectors shipped under films/: worst deviation
- * 0.5 percent of saturation over 3600 angles, which is integer rounding, not
- * a change of shape.
- */
-/*
  * OFF / WEAK / STRONG, or 0..2, because a Fuji recipe lists either the word
  * or nothing at all and a hand-written .fs should not have to quote it.
  */
@@ -164,9 +153,23 @@ static int sc_level(sc *t)
     if (w[0] == '0' || w[0] == 'o' || w[0] == 'O') return 0;      /* off     */
     if (w[0] == '1' || w[0] == 'w' || w[0] == 'W') return 1;      /* weak    */
     if (w[0] == '2' || w[0] == 's' || w[0] == 'S') return 2;      /* strong  */
+    /* A typo used to read as Off with no trace, which is the one failure
+     * mode nobody would find: the look is subtly wrong and nothing says so. */
+    se_log("stock: '%s' is not OFF/WEAK/STRONG or 0..2; reading it as OFF", w);
     return 0;
 }
 
+/*
+ * A per-hue vector, honouring the older six-value form.
+ *
+ * Six values used to mean R, Y, G, C, B, M with the engine interpolating in
+ * between; now there are twelve knots at half that spacing. Expanding by
+ * inserting the average of each neighbouring pair reproduces the old curve,
+ * because that is exactly what the old interpolation did between its knots.
+ * Verified against all 25 hue vectors shipped under films/: worst deviation
+ * 0.5 percent of saturation over 3600 angles, which is integer rounding, not
+ * a change of shape.
+ */
 static int parse_hue_vec(sc *t, float *out)
 {
     float v[SE_HUE_SECTORS];

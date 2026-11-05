@@ -296,12 +296,17 @@ void fsg_draw_tone(const fs_creator_t *c)
     }
 
     fsg_text(gx, gy - 26, FSG_T_MED, FSG_WHITE, FSG_BG, "HIGHLIGHT / SHADOW");
+    /* The active field is the bright one, like the wheel screen: two
+     * readouts both drawn amber left no way to know which number UP/DOWN
+     * was about to move. */
     fsg_text(gx + gw + 24, gy, FSG_T_SMALL, FSG_GREY, FSG_BG, "SHADOW");
     snprintf(value, sizeof value, "%+d", c->shadow);
-    fsg_text(gx + gw + 24, gy + 18, FSG_T_LARGE, FSG_AMBER, FSG_BG, "%s", value);
+    fsg_text(gx + gw + 24, gy + 18, FSG_T_LARGE,
+             c->field == 0 ? FSG_AMBER : FSG_GREY_DIM, FSG_BG, "%s", value);
     fsg_text(gx + gw + 24, gy + 70, FSG_T_SMALL, FSG_GREY, FSG_BG, "HIGHLIGHT");
     snprintf(value, sizeof value, "%+d", c->highlight);
-    fsg_text(gx + gw + 24, gy + 88, FSG_T_LARGE, FSG_AMBER, FSG_BG, "%s", value);
+    fsg_text(gx + gw + 24, gy + 88, FSG_T_LARGE,
+             c->field == 1 ? FSG_AMBER : FSG_GREY_DIM, FSG_BG, "%s", value);
     if (c->dirty)
         fsg_text(gx + gw + 24, gy + 150, FSG_T_SMALL, FSG_AMBER, FSG_BG, "UNSAVED");
 

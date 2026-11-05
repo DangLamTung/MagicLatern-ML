@@ -284,9 +284,13 @@ void se_look_from_stock(const se_stock *s, int scale, se_look *lk) {
       lk->hue_any = 1;
   }
 
-  /* weak 128, strong 256: half and full */
-  lk->chrome  = (s->color_chrome > 0 ? s->color_chrome : 0) * 128;
-  lk->fx_blue = (s->fx_blue > 0 ? s->fx_blue : 0) * 128;
+  /* weak 128, strong 256: half and full. Clamped at the conversion because a
+   * .fs is text a person can mistype: "COLOR_CHROME 9" used to become 1152,
+   * four times Strong, and nothing said so. Fuji has three values. */
+  lk->chrome  = s->color_chrome >= 2 ? 256
+              : (s->color_chrome == 1 ? 128 : 0);
+  lk->fx_blue = s->fx_blue >= 2 ? 256
+              : (s->fx_blue == 1 ? 128 : 0);
 
   lk->sat = s->sat_set ? (int)(s->sat * 2.56f + 0.5f) : 256;
   if (lk->sat < 0)
@@ -784,21 +788,6 @@ static void grade_row(const se_look *lk, uint8_t *row, int w)
         int bb = lk->map[2][o2];
 
     /*
-     * The per-hue stage, on the colour the curves produced.
-     *
-     * Saturation, rotation and luminance all act on the same two
-     * numbers, so this works in luma + chroma rather than in RGB:
-     * u and v ARE the colour, rotating them IS a hue shift, scaling
-     * them IS saturation, and y on its own IS how bright that hue
-     * renders. Doing it in RGB would need three separate passes and
-     * could not express a rotation at all.
-     *
-     * Everything is derived from luma8's own weights, so the inverse
-     * below is exact up to luma8's truncation -- which is why the
-     * whole block is skipped when a stock asks for nothing per-hue,
-     * rather than relying on it round-tripping to the same bytes.
-     */
-    /*
      * Color Chrome and FX Blue need the hue and the chroma but not the
      * per-hue tables, so they get their own gate: a recipe can ask for
      * Strong Color Chrome with no HUE_SAT line at all, and before this it
@@ -865,6 +854,21 @@ static void grade_row(const se_look *lk, uint8_t *row, int w)
       }
     }
 
+    /*
+     * The per-hue stage, on the colour the curves produced.
+     *
+     * Saturation, rotation and luminance all act on the same two
+     * numbers, so this works in luma + chroma rather than in RGB:
+     * u and v ARE the colour, rotating them IS a hue shift, scaling
+     * them IS saturation, and y on its own IS how bright that hue
+     * renders. Doing it in RGB would need three separate passes and
+     * could not express a rotation at all.
+     *
+     * Everything is derived from luma8's own weights, so the inverse
+     * below is exact up to luma8's truncation -- which is why the
+     * whole block is skipped when a stock asks for nothing per-hue,
+     * rather than relying on it round-tripping to the same bytes.
+     */
     if (lk->hue_any) {
       int chroma;
       int h = hue1536(rr, gg, bb, &chroma);

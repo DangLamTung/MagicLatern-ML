@@ -4837,6 +4837,10 @@ static void fs_creator_save_task(void *unused) {
       NotifyBox(1800, "Creator: write failed");
       fs_log("creator: writing '%s' gave %d of %d bytes", path, wrote, n);
       fs_log_flush();
+      /* Without this the flag stays set and every later save is refused by
+       * fs_creator_save_trigger's `if (!fs_creator_saving)`, silently, until
+       * the camera is restarted. */
+      fs_creator_saving = 0;
       return;
     }
   }
@@ -4934,10 +4938,40 @@ static void fs_wb_render(void)
 }
 
 static void fs_wb_apply_task(void *unused) {
+  int want_ba, want_gm;
+
   fs_log("fuji: apply task started");
   fs_log_flush();
+
+  /* what the camera should hold after this, so it can be checked rather
+   * than assumed */
+  {
+    int sba, sgm;
+    fs_stock_wb_shift(&sba, &sgm);
+    want_ba = fs_clamp_i(sba + fs_clamp_i(film_sim_wbs_ba, -9, 9), -9, 9);
+    want_gm = fs_clamp_i(sgm + fs_clamp_i(film_sim_wbs_gm, -9, 9), -9, 9);
+  }
+
   fs_push_wb_shift();
-  fs_wb_applied = 1;
+
+  /*
+   * prop_request_change() is fire-and-forget: it returns as soon as the
+   * request is queued. Read the property back before the screen claims
+   * anything, so "IN CAMERA" means the camera agreed, not that a message
+   * was sent.
+   */
+  msleep(80);
+  if (lens_info.wbs_ba == want_ba && lens_info.wbs_gm == want_gm) {
+    fs_wb_applied = 1;
+    fs_log("fuji: camera reports B/A %+d G/M %+d, as asked",
+           (int)lens_info.wbs_ba, (int)lens_info.wbs_gm);
+  } else {
+    fs_wb_applied = 0;
+    fs_log("fuji: camera reports B/A %+d G/M %+d, asked for %+d %+d -- "
+           "not applied", (int)lens_info.wbs_ba, (int)lens_info.wbs_gm,
+           want_ba, want_gm);
+  }
+  fs_log_flush();
   fs_wb_dirty = 1;
 }
 

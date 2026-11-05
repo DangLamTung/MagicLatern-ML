@@ -7845,10 +7845,15 @@ static unsigned int film_sim_init() {
     fs_log("%s (install %d)", fs_yuvhook_note(), e);
     fs_log_flush();
     task_create("fs_yuvpoll", 0x1e, 0x2000, fs_yuv_poll_task, 0);
-  } else if (film_sim_yuvrows > 0) {
-    int e = fs_yuvhook_install();
-    fs_log("%s (install %d)", fs_yuvhook_note(), e);
-    fs_log_flush();
+  } else if (film_sim_yuvrows > 0 || film_sim_lv3d) {
+    /* The shot hook needs the row path; the LiveView lattice does not. Gating
+     * this on yuvrows alone left lv3d unbaked at boot whenever the shutter
+     * grade was off -- the switch did nothing exactly when it was turned on. */
+    if (film_sim_yuvrows > 0) {
+      int e = fs_yuvhook_install();
+      fs_log("%s (install %d)", fs_yuvhook_note(), e);
+      fs_log_flush();
+    }
     char stk[FS_PATH_LEN];
     if (fs_active_stock_path(stk, sizeof stk, NULL)) {
       if (fs_yuvlook_bake_lut(stk, film_sim_strength, fs_own_lut_path()) == 0 &&

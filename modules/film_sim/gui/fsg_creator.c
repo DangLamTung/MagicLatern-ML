@@ -491,7 +491,7 @@ void fsg_draw_fx(const fs_creator_t *c)
     int i;
 
     fsg_fill(0, 0, FSG_W, FSG_H, FSG_BG);
-    snprintf(right, sizeof right, "%d / %d", c->sel + 1, FS_CREATOR_WEDGES);
+    snprintf(right, sizeof right, "%s", c->saved ? "SAVED" : "UNSAVED");
     header("COLOR CREATOR", c->stock, right);
 
     fsg_text(24, 76, FSG_T_LARGE, FSG_AMBER, FSG_BG, "FX");
@@ -511,6 +511,17 @@ void fsg_draw_fx(const fs_creator_t *c)
         fsg_text(600, y, FSG_T_SMALL, FSG_WHITE, FSG_BG, "%s", value);
         bar_bipolar(24, y + 18, 640, 16, v, lo[i], hi[i], lo[i],
                     i == c->field ? FSG_AMBER : FSG_RED_MID, i == c->field);
+    }
+    if (c->saved) {
+        char line[48];
+        snprintf(line, sizeof line, "SAVED ML/FILM/%s.fs",
+                 c->saved_name ? c->saved_name : "WHEEL");
+        fsg_text(24, 386, FSG_T_SMALL, FSG_GREEN, FSG_BG, "%s", line);
+    } else {
+        char line[48];
+        snprintf(line, sizeof line, "PLAY writes %s.fs",
+                 c->slot_name ? c->slot_name : "WHEEL");
+        fsg_text(24, 386, FSG_T_SMALL, FSG_GREY, FSG_BG, "%s", line);
     }
     footer("UP/DOWN value    SET field    PLAY save",
            "Q: wheel/tone/fx    MENU back");
@@ -835,6 +846,16 @@ void fs_creator_step(fs_creator_t *c, int act)
                 if (c->lum[c->sel] < 0) c->lum[c->sel] = 0;
                 if (c->lum[c->sel] > 200) c->lum[c->sel] = 200;
             }
+        } else if (c->screen == 2) {
+            int step = (act == A_UP) ? 1 : -1;
+            int *v = (c->field == 0) ? &c->grain
+                   : (c->field == 1) ? &c->grain_size
+                   : (c->field == 2) ? &c->halation
+                   : (c->field == 3) ? &c->chrome : &c->fx_blue;
+            int hi = (c->field >= 3) ? 2 : 100;
+            *v += step * (c->field >= 3 ? 1 : 2);
+            if (*v < 0) *v = 0;
+            if (*v > hi) *v = hi;
         } else {
             if (c->field == 0) {
                 c->shadow += (act == A_UP) ? 2 : -2;

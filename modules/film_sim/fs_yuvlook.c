@@ -122,8 +122,21 @@ static int bake_cube_load(const char *path, se_lut3 *cube, uint16_t **hold)
     if (fread(*hold, 1, need - 8u, f) != need - 8u) { fclose(f); free(*hold); *hold = NULL; return -1; }
     fclose(f);
 #else
-    if (FIO_ReadFile(f, (char *)*hold, (int)(need - 8u)) != (int)(need - 8u)) {
-        FIO_CloseFile(f); free(*hold); *hold = NULL; return -1;
+    /* 8 KB at a time, like the .fs read above: FIO_ReadFile() asserts on a
+     * single read larger than that into ordinary cacheable memory, and a 17^3
+     * cube is 29 478 bytes -- the assert would fire the first time a stock
+     * with its own cube was baked. */
+    {
+        size_t got = 0, want = need - 8u;
+        while (got < want) {
+            int chunk = (want - got) > 8192u ? 8192 : (int)(want - got);
+            int r = FIO_ReadFile(f, (char *)*hold + got, chunk);
+            if (r <= 0) break;
+            got += (size_t)r;
+        }
+        if (got != want) {
+            FIO_CloseFile(f); free(*hold); *hold = NULL; return -1;
+        }
     }
     FIO_CloseFile(f);
 #endif

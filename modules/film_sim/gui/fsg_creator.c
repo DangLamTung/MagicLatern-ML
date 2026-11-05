@@ -2,9 +2,10 @@
  * The 12-colour creator, drawn.
  *
  * Only fsg_fill() and fsg_text(): no lines, no circles, no alpha. So the
- * wheel is a ring of square beads and a disc rasterised row by row, and the
- * "dotted" guide ray is a run of small squares. That is a constraint of the
- * panel, not a shortcut.
+ * wheel is a dodecagon radar rasterised via scanline polygon fills, and the
+ * guide ray is a run of small squares. Every colour is either a fixed constant
+ * from fsg.h or a palette slot registered via fsg_pal(), so the camera's 8-bit
+ * overlay and the desktop preview produce the exact same screen.
  */
 #include <stdarg.h>
 #include <stdio.h>
@@ -23,6 +24,11 @@ static const char *const wedge_name[FS_CREATOR_WEDGES] = {
     "CYAN", "AZURE", "BLUE", "VIOLET", "MAGENTA", "ROSE",
 };
 
+static const char *const wedge_short[FS_CREATOR_WEDGES] = {
+    "R", "OR", "Y", "LM", "G", "SP",
+    "CY", "AZ", "B", "VI", "MG", "RS",
+};
+
 const char *fs_creator_wedge_name(int i)
 {
     return wedge_name[((i % FS_CREATOR_WEDGES) + FS_CREATOR_WEDGES) % FS_CREATOR_WEDGES];
@@ -32,8 +38,9 @@ const char *fs_creator_wedge_name(int i)
  * Nominal colour of a wedge, as a hue sweep at a fixed S and V so the twelve
  * read as one family. Integer only: the camera has no libm in this path.
  *
- * These are for the BEADS. They are not what the stock does to a colour --
- * the engine decides that -- they only say which wedge a number belongs to.
+ * These are for the BEADS and SECTORS. They are not what the stock does to a
+ * colour -- the engine decides that -- they only say which wedge a number
+ * belongs to.
  */
 int fs_creator_wedge_rgb(int i)
 {
@@ -42,7 +49,6 @@ int fs_creator_wedge_rgb(int i)
     int seg = (h * 300) / 600;          /* which 60-degree sector */
     int f   = (h * 300) % 600;          /* 0..599 within it       */
     int up  = f * 255 / 600;
-    int dn  = 255 - up;
     /* S = 0.72, V = 1.0: vivid enough to tell apart, dull enough not to
      * look like a warning light on a camera screen. */
     int v   = 235;
@@ -57,7 +63,6 @@ int fs_creator_wedge_rgb(int i)
     case 4:  r = lo + (v - lo) * up / 255; g = lo; b = v;  break;
     default: r = v;  g = lo;  b = v - (v - lo) * up / 255; break;
     }
-    (void)dn;
     return (r << 16) | (g << 8) | b;
 }
 
@@ -67,11 +72,8 @@ int fs_creator_wedge_rgb(int i)
  * overlay palette has 175 (FSG_PAL_N, entries 80..254) and only the first
  * sixteen are ever borrowed by another screen, so 48 is safe -- nothing else
  * references slots 16..47.
- *
- * The steps are eighths, not a real blend: the panel indexes a palette, there
- * is no interpolation, so a "gradient" is only ever this many flat steps.
  */
-static const int wedge_shade[CREATOR_BANDS] = { 72, 128, 190, 255 };
+static const int wedge_shade[CREATOR_BANDS] = { 68, 122, 184, 255 };
 
 void fs_creator_register_palette(void)
 {
@@ -92,6 +94,13 @@ static const int sin30[12] = { 0, 500, 866, 1000, 866, 500,
                                0, -500, -866, -1000, -866, -500 };
 
 /* ---- small drawing helpers over fills -------------------------------- */
+
+static int isqrt_i(int v)
+{
+    int r = 0;
+    while ((r + 1) * (r + 1) <= v) r++;
+    return r;
+}
 
 static void line_fill(int x0, int y0, int x1, int y1, int c)
 {
@@ -114,13 +123,10 @@ static void line_fill(int x0, int y0, int x1, int y1, int c)
 
 /* sin/cos for a tenth of a degree, from the 30-degree table, in 0.001 units.
  * Index 0 is +x, so angle 900 is straight up. */
-static int isqrt_i(int v);
-
 static void sincos10(int ang, int *s10, int *c10)
 {
     int idx, f, a, b, id2;
-    if (ang < 0) ang += 3600;
-    ang %= 3600;
+    ang = ((ang % 3600) + 3600) % 3600;
     idx = (ang / 300) % 12;
     f = ang % 300;
     a = sin30[idx]; b = sin30[(idx + 1) % 12];
@@ -129,15 +135,6 @@ static void sincos10(int ang, int *s10, int *c10)
     a = sin30[id2]; b = sin30[(id2 + 1) % 12];
     *c10 = a + (b - a) * f / 300;
 
-    /*
-     * Interpolating (sin, cos) as a straight line between two 30-degree knots
-     * gives the right DIRECTION but a vector only cos(15) = 0.966 long, so
-     * every point between knots was drawn 3.4% too close to the centre: the
-     * filled sectors ended short of the perimeter they were meant to meet,
-     * leaving a dark ring of slivers at every corner. Scale the vector back to
-     * unit length -- the divisions are only paid for the interpolated angles,
-     * the twelve knots return early.
-     */
     if (f) {
         int mag2 = *s10 * *s10 + *c10 * *c10;
         if (mag2 > 0) {
@@ -158,16 +155,6 @@ static void dodec_point(int cx, int cy, int r, int ang10, int *ox, int *oy)
     *oy = cy - (r * s10) / 1000;
 }
 
-static int isqrt_i(int v)
-{
-    int r = 0;
-    while ((r + 1) * (r + 1) <= v) r++;
-    return r;
-}
-
-/* A filled circle, one row per fill. Used for the beads: 1-px outlines on a
- * dark disc read as a wireframe diagram, which is what the first version
- * looked like. */
 static void circle_fill(int cx, int cy, int r, int colour)
 {
     int dy;
@@ -175,6 +162,11 @@ static void circle_fill(int cx, int cy, int r, int colour)
         int half = isqrt_i(r * r - dy * dy);
         fsg_fill(cx - half, cy + dy, half * 2 + 1, 1, colour);
     }
+}
+
+static void disc(int cx, int cy, int r, int colour)
+{
+    circle_fill(cx, cy, r, colour);
 }
 
 static void rect_outline(int x, int y, int w, int h, int c)
@@ -185,88 +177,100 @@ static void rect_outline(int x, int y, int w, int h, int c)
     fsg_fill(x + w - 1, y, 1, h, c);
 }
 
-/* A filled disc, one row per fill. 256 fills: fine for a screen that is
- * redrawn on a key press, not per frame. */
-static int isqrt(int v)
+static void corners(int x, int y, int w, int h, int rgb, int len)
 {
-    int r = 0;
-    /* incremental: at most as many steps as the root, and r <= 255 here */
-    while ((r + 1) * (r + 1) <= v) r++;
-    return r;
+    fsg_fill(x, y, len, 2, rgb);
+    fsg_fill(x, y, 2, len, rgb);
+    fsg_fill(x + w - len, y, len, 2, rgb);
+    fsg_fill(x + w - 2, y, 2, len, rgb);
+    fsg_fill(x, y + h - 2, len, 2, rgb);
+    fsg_fill(x, y + h - len, 2, len, rgb);
+    fsg_fill(x + w - len, y + h - 2, len, 2, rgb);
+    fsg_fill(x + w - 2, y + h - len, 2, len, rgb);
 }
 
-static void disc(int cx, int cy, int r, int colour)
+static void panel_card(int x, int y, int w, int h)
 {
-    int dy;
-    for (dy = -r; dy <= r; dy++) {
-        int half = isqrt(r * r - dy * dy);
-        fsg_fill(cx - half, cy + dy, half * 2 + 1, 1, colour);
-    }
+    fsg_fill(x + 3, y + 3, w, h, FSG_BLACK);
+    fsg_fill(x, y, w, h, FSG_PANEL);
+    rect_outline(x, y, w, h, FSG_LINE);
+    corners(x, y, w, h, FSG_AMBER_DIM, 14);
 }
 
-static void bead(int cx, int cy, int size, int colour)
-{
-    fsg_fill(cx - size / 2, cy - size / 2, size, size, colour);
-}
-
-/* sin/cos in degrees for the 12 positions, tenths of a unit. A table, so the
- * wheel geometry is exact and needs no libm on the camera. */
 /* the ring's geometry, in one place: the static screen and the spin redraw
  * must agree or a bead would be erased where it was not drawn */
-#define CREATOR_PANEL_X 392   /* the wheel's box ends here */
-#define CREATOR_CX      196
-#define CREATOR_CY      250
-#define CREATOR_R_OUT   150
-#define CREATOR_R_IN    58
-#define CREATOR_BEAD_R  14      /* half the largest bead box                */
+#define CREATOR_PANEL_X 388   /* the wheel's box ends here */
+#define CREATOR_CX      194
+#define CREATOR_CY      252
+#define CREATOR_R_OUT   152
+#define CREATOR_R_IN    54
 #define CREATOR_DISC_BG FSG_PANEL_DARK
 
-static void ring_pos(int cx, int cy, int r, int i, int *ox, int *oy)
-{
-    int s = sin30[((i % 12) + 12) % 12];
-    int c = sin30[((i + 3) % 12 + 12) % 12];
-    *ox = cx + (r * c) / 1000;
-    *oy = cy - (r * s) / 1000;   /* screen y grows downward */
-}
-
-static void bar(int x, int y, int w, int h, int value, int lo, int hi,
-                int fill, int active)
+/* Bipolar bar: fills outward from the neutral midpoint (`mid_val`), so an
+ * untouched control reads as a clean zero tick rather than a half-full bar. */
+static void bar_bipolar(int x, int y, int w, int h, int value, int lo, int hi,
+                        int mid_val, int fill, int active)
 {
     int span = hi - lo;
-    int pos  = (span > 0) ? ((value - lo) * (w - 2)) / span : 0;
-    if (pos < 0) pos = 0;
-    if (pos > w - 2) pos = w - 2;
+    int inner = w - 4;
+    int pos = (span > 0) ? ((value - lo) * inner) / span : 0;
+    int mid = (span > 0) ? ((mid_val - lo) * inner) / span : inner / 2;
+    int x0, x1;
 
-    fsg_fill(x, y, w, h, FSG_PANEL_DARK);
-    fsg_fill(x + 1, y + 1, pos, h - 2, fill);
+    if (pos < 0) pos = 0;
+    if (pos > inner) pos = inner;
+    if (mid < 0) mid = 0;
+    if (mid > inner) mid = inner;
+
+    fsg_fill(x, y, w, h, FSG_BG_DEEP);
     rect_outline(x, y, w, h, active ? FSG_AMBER : FSG_LINE_DIM);
-    /* centre tick: where "unchanged" sits */
-    {
-        int mid = (0 - lo) * (w - 2) / (span ? span : 1) + 1;
-        fsg_fill(x + mid, y + 1, 1, h - 2, active ? FSG_AMBER_DIM : FSG_LINE);
+
+    /* quarter ticks */
+    fsg_fill(x + 2 + inner / 4, y + h - 4, 1, 3, FSG_LINE_DIM);
+    fsg_fill(x + 2 + (inner * 3) / 4, y + h - 4, 1, 3, FSG_LINE_DIM);
+
+    if (pos > mid) {
+        x0 = x + 2 + mid;
+        x1 = x + 2 + pos;
+        fsg_fill(x0, y + 2, x1 - x0, h - 4, fill);
+    } else if (pos < mid) {
+        x0 = x + 2 + pos;
+        x1 = x + 2 + mid;
+        fsg_fill(x0, y + 2, x1 - x0, h - 4, fill);
     }
+
+    /* neutral centre tick */
+    fsg_fill(x + 2 + mid, y + 1, 1, h - 2, active ? FSG_WHITE : FSG_LINE);
+    /* thumb marker at current value */
+    fsg_fill(x + 1 + pos, y + 1, 3, h - 2, active ? FSG_WHITE : FSG_GREY);
 }
 
 /* ---- header / footer -------------------------------------------------- */
 
-static void header(const char *stock, const char *right, int tick)
+static void header(const char *title, const char *stock, const char *right)
 {
-    int sheen = FSG_RED_DEEP + (tick & 7);
     fsg_fill(0, 0, FSG_W, 44, FSG_RED_DEEP);
-    fsg_fill(0, 42, FSG_W, 2, FSG_RED_DARK);
+    fsg_fill(0, 42, FSG_W, 2, FSG_RED);
     fsg_fill(0, 0, 6, 44, FSG_AMBER);
-    fsg_text(20, 9, FSG_T_MED, FSG_AMBER, FSG_RED_DEEP, "COLOR CREATOR");
+    fsg_text(18, 7, FSG_T_MED, FSG_AMBER, FSG_RED_DEEP, "%s", title);
     if (stock && stock[0])
-        fsg_text(20, 30, FSG_T_SMALL, 0xE8C9A0, FSG_RED_DEEP, "%s", stock);
-    fsg_text(600, 15, FSG_T_MED, FSG_WHITE, FSG_RED_DEEP, "%s", right);
-    (void)sheen;
+        fsg_text(18, 27, FSG_T_SMALL, FSG_GREY, FSG_RED_DEEP, "%s", stock);
+    if (right && right[0]) {
+        int rx = FSG_W - 18 - (int)strlen(right) * 11;
+        fsg_text(rx, 13, FSG_T_MED, FSG_WHITE, FSG_RED_DEEP, "%s", right);
+    }
 }
 
-static void footer(const char *keys)
+static void footer(const char *keys_l, const char *keys_r)
 {
-    fsg_fill(0, FSG_H - 44, FSG_W, 44, FSG_BG_DEEP);
-    fsg_fill(0, FSG_H - 44, FSG_W, 1, FSG_LINE);
-    fsg_text(16, FSG_H - 33, FSG_T_SMALL, FSG_GREY, FSG_BG_DEEP, "%s", keys);
+    fsg_fill(0, FSG_H - 36, FSG_W, 36, FSG_BG_DEEP);
+    fsg_fill(0, FSG_H - 36, FSG_W, 1, FSG_LINE);
+    if (keys_l)
+        fsg_text(16, FSG_H - 24, FSG_T_SMALL, FSG_GREY, FSG_BG_DEEP, "%s", keys_l);
+    if (keys_r) {
+        int rx = FSG_W - 16 - (int)strlen(keys_r) * 8;
+        fsg_text(rx, FSG_H - 24, FSG_T_SMALL, FSG_AMBER, FSG_BG_DEEP, "%s", keys_r);
+    }
 }
 
 const char *const fs_creator_tabs[3] = { "Saturation", "Luminance", "Hue" };
@@ -318,317 +322,428 @@ static void sector_band(int cx, int cy, int r0, int r1, int a1, int a2, int colo
 
 /* ---- the wheel -------------------------------------------------------- */
 
-/* One wedge's bead. `sel` draws the halo and the inner disc. */
-/*
- * The wheel as the reference UI draws it: a dodecagon whose vertex for each
- * wedge moves in or out with that wedge's value, a coloured perimeter showing
- * which colour each wedge is, and the twelve numbers around the rim. The whole
- * figure rotates with `offset_q16`, so the dial turns the shape.
- *
- * Values map to radius with the neutral mid-point at R_MID: 100 for saturation
- * and luminance, 0 for rotation, so "untouched" is a clean regular dodecagon.
- */
 #define CREATOR_R_MID   90
 #define CREATOR_R_SPAN  32  /* +-32 px over the full value range */
 #define CREATOR_R_MAX   126    /* the coloured perimeter */
 
 static int wedge_radius(const fs_creator_t *c, int i, int tab)
 {
-  int v   = (tab == 0) ? c->sat[i] : (tab == 1 ? c->rot[i] : c->lum[i]);
-  int mid  = (tab == 1) ? 0 : 100;
-  int span = (tab == 1) ? 180 : 100;
-  int d = v - mid;
-  if (d > span) d = span;
-  if (d < -span) d = -span;
-  return CREATOR_R_MID + (d * CREATOR_R_SPAN) / span;
+    int v    = (tab == 0) ? c->sat[i] : (tab == 1 ? c->rot[i] : c->lum[i]);
+    int mid  = (tab == 1) ? 0 : 100;
+    int span = (tab == 1) ? 180 : 100;
+    int d = v - mid;
+    if (d > span) d = span;
+    if (d < -span) d = -span;
+    return CREATOR_R_MID + (d * CREATOR_R_SPAN) / span;
 }
 
 /* angle of wedge i, in tenths of a degree, with index 0 at the top */
 static int wedge_angle(int i, int offset_q16)
 {
-  int off10 = (int)(((long long)offset_q16 * 300) / 65536);
-  return ((i * 300 - off10 + 900) % 3600 + 3600) % 3600;
+    int off10 = (int)(((long long)offset_q16 * 300) / 65536);
+    return ((i * 300 - off10 + 900) % 3600 + 3600) % 3600;
 }
 
 void fsg_draw_creator_wheel(const fs_creator_t *c, int offset_q16)
 {
-  const int cx = CREATOR_CX, cy = CREATOR_CY;
-  int i, px[FS_CREATOR_WEDGES], py[FS_CREATOR_WEDGES];
-  char num[8];
+    const int cx = CREATOR_CX, cy = CREATOR_CY;
+    int i, px[FS_CREATOR_WEDGES], py[FS_CREATOR_WEDGES];
+    char num[12];
 
-  fs_creator_register_palette();
+    /* clear the wheel's box only: the right-hand panel is untouched and stays
+     * in the idle buffer, which is what makes a spin frame cheap */
+    fsg_fill(0, FSG_CREATOR_RING_Y0, CREATOR_PANEL_X,
+             FSG_CREATOR_RING_Y1 - FSG_CREATOR_RING_Y0, FSG_BG);
 
-  /* clear the wheel's box only: the right-hand panel is untouched and stays
-   * in the idle buffer, which is what makes a spin frame cheap */
-  fsg_fill(0, FSG_CREATOR_RING_Y0, CREATOR_PANEL_X,
-           FSG_CREATOR_RING_Y1 - FSG_CREATOR_RING_Y0, FSG_BG);
+    /* Outer machined bezel ring + dark dial plate */
+    disc(cx, cy, CREATOR_R_OUT + 2, FSG_LINE_DIM);
+    disc(cx, cy, CREATOR_R_OUT, CREATOR_DISC_BG);
 
-  disc(cx, cy, CREATOR_R_OUT, FSG_PANEL_DARK);
-
-  /* the colour field: twelve wedges, each in four flat steps from the hub out
-   * to the perimeter, so the disc reads as a wheel of colour the way the
-   * reference does -- the value polygon is drawn over it */
-  {
-    /* the field ends ON the perimeter, not past it: colour outside the rim
-     * line left ragged slivers at every dodecagon corner */
-    int b, r0 = CREATOR_R_IN + 2, r1 = CREATOR_R_MAX;
-    int step = (r1 - r0) / CREATOR_BANDS;
-    for (b = 0; b < CREATOR_BANDS; b++) {
-      int lo = r0 + b * step, hi = (b == CREATOR_BANDS - 1) ? r1 : lo + step;
-      for (i = 0; i < FS_CREATOR_WEDGES; i++) {
-        int a = wedge_angle(i, offset_q16);
-        sector_band(cx, cy, lo, hi, a - 150, a + 150, CREATOR_SLOT(i, b));
-      }
+    /* 12 wedges x 4 concentric bands from the hub out to the perimeter */
+    {
+        int b, r0 = CREATOR_R_IN + 2, r1 = CREATOR_R_MAX;
+        int step = (r1 - r0) / CREATOR_BANDS;
+        for (b = 0; b < CREATOR_BANDS; b++) {
+            int lo = r0 + b * step, hi = (b == CREATOR_BANDS - 1) ? r1 : lo + step;
+            for (i = 0; i < FS_CREATOR_WEDGES; i++) {
+                int a = wedge_angle(i, offset_q16);
+                sector_band(cx, cy, lo, hi, a - 150, a + 150, CREATOR_SLOT(i, b));
+            }
+        }
     }
-  }
-  disc(cx, cy, CREATOR_R_IN, FSG_BG_DEEP);
 
-  for (i = 0; i < FS_CREATOR_WEDGES; i++)
-    dodec_point(cx, cy, wedge_radius(c, i, c->field),
-                wedge_angle(i, offset_q16), &px[i], &py[i]);
+    /* 12 radial facet dividers between wedges + neutral R_MID reference ring */
+    for (i = 0; i < FS_CREATOR_WEDGES; i++) {
+        int x0, y0, x1, y1, mx0, my0, mx1, my1;
+        int a = wedge_angle(i, offset_q16);
+        dodec_point(cx, cy, CREATOR_R_IN + 2, a - 150, &x0, &y0);
+        dodec_point(cx, cy, CREATOR_R_MAX, a - 150, &x1, &y1);
+        line_fill(x0, y0, x1, y1, FSG_BG_DEEP);
 
-  /* the coloured perimeter, drawn on the fill's OWN outer chord. It used to
-   * join the wedge centres, which is 15 degrees off the corners the fill ends
-   * at -- two dodecagons a half step apart, and slivers of dark between them. */
-  for (i = 0; i < FS_CREATOR_WEDGES; i++) {
-    int x1, y1, x2, y2, a = wedge_angle(i, offset_q16);
-    dodec_point(cx, cy, CREATOR_R_MAX, a - 150, &x1, &y1);
-    dodec_point(cx, cy, CREATOR_R_MAX, a + 150, &x2, &y2);
-    line_fill(x1, y1, x2, y2, CREATOR_SLOT(i, CREATOR_BANDS - 1));
-    line_fill(x1, y1 + 1, x2, y2 + 1, CREATOR_SLOT(i, CREATOR_BANDS - 1));
-  }
+        /* Neutral 100% / 0-deg reference dodecagon chord */
+        dodec_point(cx, cy, CREATOR_R_MID, a - 150, &mx0, &my0);
+        dodec_point(cx, cy, CREATOR_R_MID, a + 150, &mx1, &my1);
+        line_fill(mx0, my0, mx1, my1, FSG_BG_DEEP);
+    }
 
-  /* the value polygon, then its dots: a dot needs a dark skirt or one that
-   * lands on the perimeter -- same colour, same rows -- disappears into it */
-  for (i = 0; i < FS_CREATOR_WEDGES; i++) {
-    int j = (i + 1) % FS_CREATOR_WEDGES;
-    /* a dark shadow under a white edge: white on the bright outer band is a
-     * one-pixel line of near-equal luminance and disappears at arm's length */
-    line_fill(px[i], py[i] + 1, px[j], py[j] + 1, FSG_BG_DEEP);
-    line_fill(px[i], py[i], px[j], py[j], FSG_WHITE);
-  }
-  for (i = 0; i < FS_CREATOR_WEDGES; i++) {
-    /* a ring with a dark centre, so the node still reads where it sits on the
-     * brightest band of its own colour */
-    circle_fill(px[i], py[i], i == c->sel ? 9 : 6,
-                i == c->sel ? FSG_AMBER : CREATOR_SLOT(i, CREATOR_BANDS - 1));
-    circle_fill(px[i], py[i], i == c->sel ? 5 : 3,
-                i == c->sel ? FSG_AMBER : FSG_BG_DEEP);
-  }
+    /* Colored outer perimeter along the 12 facets */
+    for (i = 0; i < FS_CREATOR_WEDGES; i++) {
+        int x1, y1, x2, y2, a = wedge_angle(i, offset_q16);
+        dodec_point(cx, cy, CREATOR_R_MAX, a - 150, &x1, &y1);
+        dodec_point(cx, cy, CREATOR_R_MAX, a + 150, &x2, &y2);
+        line_fill(x1, y1, x2, y2, CREATOR_SLOT(i, CREATOR_BANDS - 1));
+        line_fill(x1, y1 + 1, x2, y2 + 1, CREATOR_SLOT(i, CREATOR_BANDS - 1));
+    }
 
-  /* the twelve numbers, outside the perimeter */
-  for (i = 0; i < FS_CREATOR_WEDGES; i++) {
-    int x, y;
-    dodec_point(cx, cy, CREATOR_R_MAX + 21, wedge_angle(i, offset_q16), &x, &y);
-    snprintf(num, sizeof num, "%d", i);
-    fsg_text(x - 3, y - 5, FSG_T_SMALL,
-             i == c->sel ? FSG_AMBER : FSG_GREY, FSG_PANEL_DARK, "%s", num);
-  }
+    /* Inner hub disc + crisp bezel ring */
+    disc(cx, cy, CREATOR_R_IN + 1, FSG_LINE);
+    disc(cx, cy, CREATOR_R_IN - 1, FSG_BG_DEEP);
 
-  /* the hub: which wedge is selected and its value in the active series */
-  fsg_text(cx - 40, cy - 18, FSG_T_MED, FSG_WHITE, FSG_BG_DEEP, "%s",
-           fs_creator_wedge_name(c->sel));
-  {
-    int v = (c->field == 0) ? c->sat[c->sel]
-          : (c->field == 1) ? c->rot[c->sel] : c->lum[c->sel];
-    snprintf(num, sizeof num, (c->field == 1) ? "%+d" : "%d", v);
-    fsg_text(cx - 30, cy + 2, FSG_T_LARGE, FSG_AMBER, FSG_BG_DEEP, "%s", num);
-  }
+    /* Compute 12 radar vertices */
+    for (i = 0; i < FS_CREATOR_WEDGES; i++)
+        dodec_point(cx, cy, wedge_radius(c, i, c->field),
+                    wedge_angle(i, offset_q16), &px[i], &py[i]);
 
-  /* a needle from the hub to the selected vertex. Without it a value change
-   * moves one dot a couple of pixels, which is what "the point in the colour
-   * wheel does not change" was: the radar was alive, the feedback was too
-   * small to see. */
-  {
-    int nx, ny, ax, ay;
-    int a = wedge_angle(c->sel, offset_q16);
-    dodec_point(cx, cy, CREATOR_R_IN + 2, a, &ax, &ay);
-    dodec_point(cx, cy, wedge_radius(c, c->sel, c->field), a, &nx, &ny);
-    line_fill(ax, ay, nx, ny, FSG_AMBER);
-    line_fill(ax, ay + 1, nx, ny + 1, FSG_AMBER);
-  }
+    /* Olympus-style radial dotted guide ray along the selected wedge */
+    {
+        int r, a = wedge_angle(c->sel, offset_q16);
+        int r_sel = wedge_radius(c, c->sel, c->field);
+        for (r = CREATOR_R_IN + 7; r <= CREATOR_R_MAX - 5; r += 8) {
+            int dx, dy;
+            if (r >= r_sel - 8 && r <= r_sel + 8) continue;
+            dodec_point(cx, cy, r, a, &dx, &dy);
+            fsg_fill(dx - 1, dy - 1, 3, 3,
+                     r < r_sel ? FSG_AMBER : FSG_WHITE);
+        }
+    }
 
-  /* the pointer the shape turns past: inside the perimeter, because the
-   * selected wedge is always the one at twelve o'clock and its number sits
-   * outside the perimeter -- a pointer out there hides the number being edited */
-  {
-    int y0 = cy - CREATOR_R_MAX + 4;
-    fsg_fill(cx - 7, y0 + 6, 15, 3, FSG_AMBER);
-    fsg_fill(cx - 5, y0 + 3, 11, 3, FSG_AMBER);
-    fsg_fill(cx - 3, y0, 7, 3, FSG_AMBER);
-  }
+    /* Value polygon contour (shadow stroke + bright white contour) */
+    for (i = 0; i < FS_CREATOR_WEDGES; i++) {
+        int j = (i + 1) % FS_CREATOR_WEDGES;
+        line_fill(px[i], py[i] + 1, px[j], py[j] + 1, FSG_BG_DEEP);
+        line_fill(px[i], py[i], px[j], py[j], FSG_WHITE);
+    }
+
+    /* 12 Colored Vertex Beads */
+    for (i = 0; i < FS_CREATOR_WEDGES; i++) {
+        if (i == c->sel) {
+            circle_fill(px[i], py[i], 9, FSG_AMBER);
+            circle_fill(px[i], py[i], 6, FSG_BG_DEEP);
+            circle_fill(px[i], py[i], 4, CREATOR_SLOT(i, CREATOR_BANDS - 1));
+        } else {
+            circle_fill(px[i], py[i], 6, FSG_BG_DEEP);
+            circle_fill(px[i], py[i], 5, CREATOR_SLOT(i, CREATOR_BANDS - 1));
+            circle_fill(px[i], py[i], 2, FSG_BG_DEEP);
+        }
+    }
+
+    /* 12 Short Hue Labels outside the perimeter */
+    for (i = 0; i < FS_CREATOR_WEDGES; i++) {
+        int x, y;
+        const char *tag = wedge_short[i];
+        int tw = (int)strlen(tag) * 7;
+        dodec_point(cx, cy, CREATOR_R_MAX + 15, wedge_angle(i, offset_q16), &x, &y);
+        fsg_text(x - tw / 2, y - 6, FSG_T_SMALL,
+                 i == c->sel ? FSG_AMBER : FSG_GREY, CREATOR_DISC_BG, "%s", tag);
+    }
+
+    /* Fixed 12-o'clock index pointer perched on the outer bezel rim,
+     * well clear of both the rim labels and boosted vertices */
+    {
+        int y_rim = cy - CREATOR_R_OUT - 6;
+        fsg_fill(cx - 6, y_rim, 13, 2, FSG_AMBER);
+        fsg_fill(cx - 4, y_rim + 2, 9, 2, FSG_AMBER);
+        fsg_fill(cx - 2, y_rim + 4, 5, 2, FSG_AMBER);
+    }
+
+    /* Hub readout: color swatch bar + centered wedge name + centered value */
+    fsg_fill(cx - 16, cy - 32, 32, 4, CREATOR_SLOT(c->sel, CREATOR_BANDS - 1));
+    {
+        const char *wname = fs_creator_wedge_name(c->sel);
+        int nw = (int)strlen(wname) * 11;
+        fsg_text(cx - nw / 2, cy - 20, FSG_T_MED, FSG_WHITE, FSG_BG_DEEP, "%s", wname);
+    }
+    {
+        int v = (c->field == 0) ? c->sat[c->sel]
+              : (c->field == 1) ? c->rot[c->sel] : c->lum[c->sel];
+        int vw;
+        snprintf(num, sizeof num, (c->field == 1) ? "%+d" : "%d", v);
+        vw = (int)strlen(num) * 16;
+        fsg_text(cx - vw / 2, cy + 4, FSG_T_LARGE, FSG_AMBER, FSG_BG_DEEP, "%s", num);
+    }
 }
 
-/*
- * The rotation entry point. The old bead ring kept per-bead positions in
- * `sp` so it could erase just those; the radar has no such trick -- a new
- * angle moves every vertex, edge and number -- so it repaints the wheel box
- * and the caller blits those rows. `sp` is accepted and ignored so the
- * animation code in film_sim.c keeps one call site for both screens.
- */
 void fsg_draw_creator_beads(const fs_creator_t *c, int offset_q16,
                             fs_creator_spin_t *sp)
 {
-  (void)sp;
-  fsg_draw_creator_wheel(c, offset_q16);
+    (void)sp;
+    fsg_draw_creator_wheel(c, offset_q16);
 }
 
 void fsg_draw_creator(const fs_creator_t *c)
 {
-    char right[24];
+    char right[32];
     char value[32];
-    int i;
+    int t;
+
+    fs_creator_register_palette();
 
     fsg_fill(0, 0, FSG_W, FSG_H, FSG_BG);
-    fsg_fill(0, 46, FSG_W, FSG_H - 90, FSG_BG);
+    snprintf(right, sizeof right, "WEDGE %02d / %02d", c->sel + 1, FS_CREATOR_WEDGES);
+    header("COLOR CREATOR", c->stock, right);
 
-    snprintf(right, sizeof right, "%d / %d", c->sel + 1, FS_CREATOR_WEDGES);
-    header(c->stock, right, c->sel);
-
-    /* the tabs use the fixed constants; the wheel registers the wedge palette
-     * itself, in fsg_draw_creator_wheel(), and that is its only owner */
-
-    /* the three series tabs */
+    /* Three series tabs above the wheel */
     {
-        int t, tx = 16;
+        int tx = 18;
         for (t = 0; t < 3; t++) {
-            int w = 118;
+            int w = 114;
             int on = (c->field == fs_creator_tab_field[t]);
-            fsg_fill(tx, 48, w, 26, on ? FSG_RED_MID : FSG_PANEL_DARK);
-            fsg_fill(tx, 48, w, 2, on ? FSG_AMBER : FSG_LINE_DIM);
-            fsg_text(tx + 10, 54, FSG_T_SMALL, on ? FSG_AMBER : FSG_GREY,
+            fsg_fill(tx, 52, w, 26, on ? FSG_RED_MID : FSG_PANEL_DARK);
+            rect_outline(tx, 52, w, 26, on ? FSG_AMBER : FSG_LINE_DIM);
+            fsg_fill(tx, 52, w, 3, on ? FSG_AMBER : FSG_LINE_DIM);
+            fsg_text(tx + 12, 59, FSG_T_SMALL, on ? FSG_AMBER : FSG_GREY,
                      on ? FSG_RED_MID : FSG_PANEL_DARK, "%s", fs_creator_tabs[t]);
             tx += w + 6;
         }
     }
 
-    /* the dodecagon radar is drawn by the shared wheel renderer */
+    /* Dodecagon radar wheel on the left */
     fsg_draw_creator_wheel(c, c->sel * 65536);
 
-    /* ---- the three dials, right-hand panel ---- */
+    /* ---- Right-hand inspector card ---- */
     {
-        const int x = 396, w = 296;
-        int y = 82;
-        static const char *const label[3] = { "SATURATION", "ROTATE", "LUMINANCE" };
-        static const int lo[3] = { 0, -180, 0 };
-        static const int hi[3] = { 200, 180, 200 };
-        fsg_text(x, y - 34, FSG_T_LARGE, FSG_AMBER, FSG_BG, "%s",
+        const int px = 392, py = 52, pw = 310, ph = 376;
+        const int ix = px + 18, iw = pw - 36;
+        int y = py + 14;
+        static const char *const label[3] = {
+            "SATURATION", "LUMINANCE", "HUE ROTATION"
+        };
+        static const int lo[3]  = { 0,   0,   -180 };
+        static const int hi[3]  = { 200, 200,  180 };
+        static const int mid[3] = { 100, 100,    0 };
+
+        panel_card(px, py, pw, ph);
+
+        /* Selected wedge swatch + title + degree badge */
+        fsg_fill(ix, y + 2, 24, 24, CREATOR_SLOT(c->sel, CREATOR_BANDS - 1));
+        rect_outline(ix, y + 2, 24, 24, FSG_WHITE);
+        fsg_text(ix + 34, y + 1, FSG_T_LARGE, FSG_AMBER, FSG_PANEL, "%s",
                  fs_creator_wedge_name(c->sel));
-        for (i = 0; i < 3; i++) {
-            int v = (i == 0) ? c->sat[c->sel] : (i == 1 ? c->rot[c->sel] : c->lum[c->sel]);
-            fsg_text(x, y, FSG_T_SMALL, i == c->field ? FSG_AMBER : FSG_GREY,
-                     FSG_BG, "%s", label[i]);
-            snprintf(value, sizeof value, (i == 1) ? "%+d" : "%d", v);
-            fsg_text(x + w - 44, y, FSG_T_SMALL, FSG_WHITE, FSG_BG, "%s", value);
-            bar(x, y + 18, w, 14, v, lo[i], hi[i],
-                i == c->field ? FSG_AMBER : FSG_RED_MID, i == c->field);
-            y += 58;
+        snprintf(value, sizeof value, "%d DEG", c->sel * 30);
+        fsg_text(px + pw - 18 - (int)strlen(value) * 8, y + 8,
+                 FSG_T_SMALL, FSG_GREY, FSG_PANEL, "%s", value);
+
+        y += 36;
+        fsg_fill(ix, y, iw, 1, FSG_LINE_DIM);
+        y += 14;
+
+        /* Three bipolar sliders in the exact same order as the top tabs */
+        for (t = 0; t < 3; t++) {
+            int fld = fs_creator_tab_field[t];
+            int on  = (c->field == fld);
+            int v   = (fld == 0) ? c->sat[c->sel]
+                    : (fld == 1) ? c->rot[c->sel] : c->lum[c->sel];
+
+            fsg_text(ix, y, FSG_T_SMALL, on ? FSG_AMBER : FSG_GREY,
+                     FSG_PANEL, "%s", label[t]);
+            snprintf(value, sizeof value, (fld == 1) ? "%+d DEG" : "%d%%", v);
+            fsg_text(ix + iw - (int)strlen(value) * 8, y, FSG_T_SMALL,
+                     on ? FSG_WHITE : FSG_GREY, FSG_PANEL, "%s", value);
+
+            bar_bipolar(ix, y + 18, iw, 16, v, lo[t], hi[t], mid[t],
+                        on ? FSG_AMBER : FSG_RED_MID, on);
+            y += 56;
         }
 
-        /* how many wedges have been moved: the one number that says whether
-         * this is still a stock or a look of its own */
+        fsg_fill(ix, y, iw, 1, FSG_LINE_DIM);
+        y += 12;
+
+        /* Wedges edited counter + target slot */
         {
-            int moved = 0;
+            int moved = 0, i;
             for (i = 0; i < FS_CREATOR_WEDGES; i++)
                 if (c->sat[i] != 100 || c->rot[i] != 0 || c->lum[i] != 100)
                     moved++;
-            fsg_text(x, y + 6, FSG_T_SMALL, FSG_GREY, FSG_BG,
-                     "WEDGES MOVED");
+            fsg_text(ix, y, FSG_T_SMALL, FSG_GREY, FSG_PANEL, "WEDGES EDITED");
             snprintf(value, sizeof value, "%d / %d", moved, FS_CREATOR_WEDGES);
-            fsg_text(x + w - 60, y + 6, FSG_T_SMALL,
-                     moved ? FSG_WHITE : FSG_GREEN, FSG_BG, "%s", value);
+            fsg_text(ix + iw - (int)strlen(value) * 8, y, FSG_T_SMALL,
+                     moved ? FSG_WHITE : FSG_GREEN, FSG_PANEL, "%s", value);
+            y += 22;
+
+            fsg_text(ix, y, FSG_T_SMALL, FSG_GREY_DIM, FSG_PANEL, "RECIPE SLOT");
+            snprintf(value, sizeof value, "ML/FILM/%s.fs",
+                     c->slot_name ? c->slot_name : "WHEEL");
+            fsg_text(ix + iw - (int)strlen(value) * 8, y, FSG_T_SMALL,
+                     FSG_WHITE, FSG_PANEL, "%s", value);
+            y += 28;
         }
+
+        /* Save status badge */
         if (c->saved) {
             char line[48];
             snprintf(line, sizeof line, "SAVED ML/FILM/%s.fs",
                      c->saved_name ? c->saved_name : "WHEEL");
-            fsg_fill(x, y + 30, w, 20, FSG_GREEN_DARK);
-            fsg_text(x + 8, y + 36, FSG_T_SMALL, FSG_GREEN, FSG_GREEN_DARK,
+            fsg_fill(ix, y, iw, 26, FSG_GREEN_DARK);
+            rect_outline(ix, y, iw, 26, FSG_GREEN);
+            fsg_text(ix + 10, y + 7, FSG_T_SMALL, FSG_GREEN, FSG_GREEN_DARK,
                      "%s", line);
         } else if (c->dirty) {
-            fsg_text(x, y + 34, FSG_T_SMALL, FSG_AMBER, FSG_BG, "UNSAVED");
-        }
-        /* what PLAY will write, always, so the slot is never a surprise */
-        if (!c->saved) {
-            char line[48];
-            snprintf(line, sizeof line, "PLAY writes %s.fs",
-                     c->slot_name ? c->slot_name : "WHEEL");
-            fsg_text(x, y + 58, FSG_T_SMALL, FSG_GREY, FSG_BG, "%s", line);
+            fsg_fill(ix, y, iw, 26, FSG_RED_DEEP);
+            rect_outline(ix, y, iw, 26, FSG_AMBER);
+            fsg_text(ix + 10, y + 7, FSG_T_SMALL, FSG_AMBER, FSG_RED_DEEP,
+                     "UNSAVED  -  PRESS PLAY TO SAVE");
+        } else {
+            fsg_fill(ix, y, iw, 26, FSG_BG_DEEP);
+            rect_outline(ix, y, iw, 26, FSG_LINE_DIM);
+            fsg_text(ix + 10, y + 7, FSG_T_SMALL, FSG_GREY_DIM, FSG_BG_DEEP,
+                     "NEUTRAL PROFILE  (PLAY SAVES)");
         }
     }
 
-    footer("DIAL wedge  UP/DOWN value  SET series  PLAY save  Q tone  MENU back");
+    footer("DIAL wedge   UP/DOWN value   SET series   PLAY save",
+           "Q tone   MENU back");
 }
 
 /* ---- the tone screen -------------------------------------------------- */
 
+/* out level for an in level, the same arithmetic the tone screen draws */
+static int tone_out(const fs_creator_t *c, int in)
+{
+    int t = in * 100 / 255;
+    int out = in + (c->shadow * (100 - t) * (100 - t)) / 10000
+                - (c->highlight * t * t)              / 10000;
+    if (out < 0) out = 0;
+    if (out > 255) out = 255;
+    return out;
+}
+
 void fsg_draw_tone(const fs_creator_t *c)
 {
-    const int gx = 96, gy = 108, gw = 400, gh = 232;
+    const int sx = 18, sy = 54, sw = 396, sh = 374;
+    const int gx = sx + 24, gy = sy + 42, gw = sw - 48, gh = sh - 66;
+    const int px = 428, py = 54, pw = 274, ph = 374;
+    const int ix = px + 18, iw = pw - 36;
     char value[32];
-    int i;
+    int i, x;
 
     fsg_fill(0, 0, FSG_W, FSG_H, FSG_BG);
-    header(c->stock, "TONE", c->shadow + c->highlight + 8);
+    header("HIGHLIGHT & SHADOW", c->stock, "TONE CURVE");
 
-    /* grid */
+    /* Left card: Oscilloscope Tone Curve Graph */
+    panel_card(sx, sy, sw, sh);
+    fsg_text(gx, sy + 14, FSG_T_MED, FSG_AMBER, FSG_PANEL, "RESPONSE CURVE");
+    fsg_text(gx + gw - 104, sy + 16, FSG_T_SMALL, FSG_GREY_DIM, FSG_PANEL,
+             "5-PT SPLINE");
+
+    fsg_fill(gx, gy, gw, gh, FSG_BG_DEEP);
     for (i = 1; i < 4; i++) {
         fsg_fill(gx + gw * i / 4, gy, 1, gh, FSG_LINE_DIM);
         fsg_fill(gx, gy + gh * i / 4, gw, 1, FSG_LINE_DIM);
     }
     rect_outline(gx, gy, gw, gh, FSG_LINE);
 
-    /*
-     * The curve, as a run of short vertical fills: identity is the diagonal,
-     * and each handle bends one end of it. Drawn from the same numbers the
-     * recipe writes, so the shape on screen is the shape the engine gets.
-     */
-    {
-        int x;
-        for (x = 0; x < gw; x++) {
-            int in  = x * 255 / gw;
-            int out = in;
-            /*
-             * SHADOW + lifts the blacks, HIGHLIGHT + compresses (darkens) the
-             * highlights -- the same sense as the engine's `black` and
-             * `shoulder`, so the curve on this screen is the curve the recipe
-             * will produce.
-             *
-             * The scale is 1 meaning 1 output level at full weight, so the
-             * +/-60 range can move an end by up to 60 levels and no more. The
-             * first version divided by 900 AND subtracted the highlight term,
-             * which made a negative highlight BRIGHTEN the top end and pinned
-             * the curve to the ceiling -- visible on the first render.
-             */
-            int t   = (in * 100) / 255;
-            out += (c->shadow    * (100 - t) * (100 - t)) / 10000;
-            out -= (c->highlight * t * t)             / 10000;
-            if (out < 0) out = 0;
-            if (out > 255) out = 255;
-            fsg_fill(gx + x, gy + gh - 1 - (out * (gh - 2)) / 255, 1, 2,
-                     FSG_AMBER);
-        }
-        /* identity reference */
-        for (x = 0; x < gw; x += 6)
-            fsg_fill(gx + x, gy + gh - 1 - (x * (gh - 2)) / gw, 1, 1, FSG_LINE);
+    /* Diagonal linear reference */
+    for (x = 0; x < gw; x += 5)
+        fsg_fill(gx + x, gy + gh - 1 - (x * (gh - 2)) / gw, 2, 1, FSG_LINE);
+
+    /* Active tone curve (shadow stroke + 3px amber curve) */
+    for (x = 0; x < gw; x++) {
+        int in  = x * 255 / gw;
+        int out = tone_out(c, in);
+        int cy_pt = gy + gh - 2 - (out * (gh - 4)) / 255;
+        fsg_fill(gx + x, cy_pt + 2, 1, 2, FSG_BLACK);
+        fsg_fill(gx + x, cy_pt, 1, 3, FSG_AMBER);
     }
 
-    fsg_text(gx, gy - 26, FSG_T_MED, FSG_WHITE, FSG_BG, "HIGHLIGHT / SHADOW");
-    /* The active field is the bright one, like the wheel screen: two
-     * readouts both drawn amber left no way to know which number UP/DOWN
-     * was about to move. */
-    fsg_text(gx + gw + 24, gy, FSG_T_SMALL, FSG_GREY, FSG_BG, "SHADOW");
-    snprintf(value, sizeof value, "%+d", c->shadow);
-    fsg_text(gx + gw + 24, gy + 18, FSG_T_LARGE,
-             c->field == 0 ? FSG_AMBER : FSG_GREY_DIM, FSG_BG, "%s", value);
-    fsg_text(gx + gw + 24, gy + 70, FSG_T_SMALL, FSG_GREY, FSG_BG, "HIGHLIGHT");
-    snprintf(value, sizeof value, "%+d", c->highlight);
-    fsg_text(gx + gw + 24, gy + 88, FSG_T_LARGE,
-             c->field == 1 ? FSG_AMBER : FSG_GREY_DIM, FSG_BG, "%s", value);
-    if (c->dirty)
-        fsg_text(gx + gw + 24, gy + 150, FSG_T_SMALL, FSG_AMBER, FSG_BG, "UNSAVED");
+    /* Shadow and Highlight control knot handles on the curve */
+    {
+        int xs = gx + gw / 5;
+        int ys = gy + gh - 2 - (tone_out(c, 51) * (gh - 4)) / 255;
+        int xh = gx + (gw * 4) / 5;
+        int yh = gy + gh - 2 - (tone_out(c, 204) * (gh - 4)) / 255;
 
-    footer("UP/DOWN value    SET field    PLAY save    Q wheel    MENU back");
+        circle_fill(xs, ys, c->field == 0 ? 7 : 5,
+                    c->field == 0 ? FSG_AMBER : FSG_GREY);
+        circle_fill(xs, ys, 3, c->field == 0 ? FSG_WHITE : FSG_BG_DEEP);
+
+        circle_fill(xh, yh, c->field == 1 ? 7 : 5,
+                    c->field == 1 ? FSG_AMBER : FSG_GREY);
+        circle_fill(xh, yh, 3, c->field == 1 ? FSG_WHITE : FSG_BG_DEEP);
+    }
+
+    /* Axis labels along bottom of scope (never crossed by the curve) */
+    fsg_text(gx, gy + gh + 6, FSG_T_SMALL, FSG_GREY_DIM, FSG_PANEL,
+             "SHADOWS (0)");
+    fsg_text(gx + gw - 110, gy + gh + 6, FSG_T_SMALL, FSG_GREY_DIM, FSG_PANEL,
+             "HIGHLIGHTS (255)");
+
+    /* Right card: Shadow & Highlight Controls */
+    panel_card(px, py, pw, ph);
+    {
+        int y = py + 16;
+        fsg_text(ix, y, FSG_T_MED, FSG_WHITE, FSG_PANEL, "TONE CONTROLS");
+        y += 28;
+        fsg_fill(ix, y, iw, 1, FSG_LINE_DIM);
+        y += 16;
+
+        /* Shadow block */
+        fsg_text(ix, y, FSG_T_SMALL, c->field == 0 ? FSG_AMBER : FSG_GREY,
+                 FSG_PANEL, "SHADOW (TOE)");
+        snprintf(value, sizeof value, "%+d", c->shadow);
+        fsg_text(ix, y + 18, FSG_T_LARGE,
+                 c->field == 0 ? FSG_AMBER : FSG_GREY_DIM, FSG_PANEL, "%s", value);
+        bar_bipolar(ix, y + 50, iw, 16, c->shadow, -60, 60, 0,
+                    c->field == 0 ? FSG_AMBER : FSG_RED_MID, c->field == 0);
+        y += 84;
+
+        /* Highlight block */
+        fsg_text(ix, y, FSG_T_SMALL, c->field == 1 ? FSG_AMBER : FSG_GREY,
+                 FSG_PANEL, "HIGHLIGHT (SHOULDER)");
+        snprintf(value, sizeof value, "%+d", c->highlight);
+        fsg_text(ix, y + 18, FSG_T_LARGE,
+                 c->field == 1 ? FSG_AMBER : FSG_GREY_DIM, FSG_PANEL, "%s", value);
+        bar_bipolar(ix, y + 50, iw, 16, c->highlight, -60, 60, 0,
+                    c->field == 1 ? FSG_AMBER : FSG_RED_MID, c->field == 1);
+        y += 82;
+
+        fsg_fill(ix, y, iw, 1, FSG_LINE_DIM);
+        y += 14;
+
+        /* Output level endpoints */
+        fsg_text(ix, y, FSG_T_SMALL, FSG_GREY, FSG_PANEL, "BLACK POINT");
+        snprintf(value, sizeof value, "0 -> %d", tone_out(c, 0));
+        fsg_text(ix + iw - (int)strlen(value) * 8, y, FSG_T_SMALL,
+                 FSG_WHITE, FSG_PANEL, "%s", value);
+        y += 22;
+
+        fsg_text(ix, y, FSG_T_SMALL, FSG_GREY, FSG_PANEL, "WHITE POINT");
+        snprintf(value, sizeof value, "255 -> %d", tone_out(c, 255));
+        fsg_text(ix + iw - (int)strlen(value) * 8, y, FSG_T_SMALL,
+                 FSG_WHITE, FSG_PANEL, "%s", value);
+        y += 28;
+
+        if (c->saved) {
+            snprintf(value, sizeof value, "SAVED %s.fs",
+                     c->saved_name ? c->saved_name : "WHEEL");
+            fsg_fill(ix, y, iw, 26, FSG_GREEN_DARK);
+            rect_outline(ix, y, iw, 26, FSG_GREEN);
+            fsg_text(ix + 10, y + 7, FSG_T_SMALL, FSG_GREEN, FSG_GREEN_DARK,
+                     "%s", value);
+        } else if (c->dirty) {
+            fsg_fill(ix, y, iw, 26, FSG_RED_DEEP);
+            rect_outline(ix, y, iw, 26, FSG_AMBER);
+            fsg_text(ix + 10, y + 7, FSG_T_SMALL, FSG_AMBER, FSG_RED_DEEP,
+                     "UNSAVED  (PLAY SAVES)");
+        } else {
+            fsg_fill(ix, y, iw, 26, FSG_BG_DEEP);
+            rect_outline(ix, y, iw, 26, FSG_LINE_DIM);
+            fsg_text(ix + 10, y + 7, FSG_T_SMALL, FSG_GREY_DIM, FSG_BG_DEEP,
+                     "LINEAR CURVE");
+        }
+    }
+
+    footer("DIAL/UP/DOWN value   SET shadow/highlight   PLAY save",
+           "Q wheel   MENU back");
 }
 
 /* ---- keys ------------------------------------------------------------- */
@@ -657,13 +772,16 @@ void fs_creator_step(fs_creator_t *c, int act)
 {
     switch (act) {
     case A_LEFT:
-        if (c->screen == 0)
-            c->sel = (c->sel + FS_CREATOR_WEDGES - 1) % FS_CREATOR_WEDGES;
-        break;
     case A_RIGHT:
-        if (c->screen == 0)
-            c->sel = (c->sel + 1) % FS_CREATOR_WEDGES;
-        break;
+        if (c->screen == 0) {
+            int d = (act == A_RIGHT) ? 1 : (FS_CREATOR_WEDGES - 1);
+            c->sel = (c->sel + d) % FS_CREATOR_WEDGES;
+            break;
+        }
+        /* On the tone screen there is no wedge to select, so turning a dial
+         * steps the active tone handle directly. */
+        act = (act == A_RIGHT) ? A_UP : A_DOWN;
+        /* fall through */
     case A_UP:
     case A_DOWN:
         if (c->screen == 0) {
@@ -683,11 +801,11 @@ void fs_creator_step(fs_creator_t *c, int act)
             }
         } else {
             if (c->field == 0) {
-                c->shadow += (act == A_UP) ? 1 : -1;
+                c->shadow += (act == A_UP) ? 2 : -2;
                 if (c->shadow < -60) c->shadow = -60;
                 if (c->shadow > 60) c->shadow = 60;
             } else {
-                c->highlight += (act == A_UP) ? 1 : -1;
+                c->highlight += (act == A_UP) ? 2 : -2;
                 if (c->highlight < -60) c->highlight = -60;
                 if (c->highlight > 60) c->highlight = 60;
             }
@@ -715,17 +833,6 @@ void fs_creator_step(fs_creator_t *c, int act)
 }
 
 /* ---- writing a recipe ------------------------------------------------ */
-
-/* out level for an in level, the same arithmetic the tone screen draws */
-static int tone_out(const fs_creator_t *c, int in)
-{
-    int t = in * 100 / 255;
-    int out = in + (c->shadow * (100 - t) * (100 - t)) / 10000
-                - (c->highlight * t * t)              / 10000;
-    if (out < 0) out = 0;
-    if (out > 255) out = 255;
-    return out;
-}
 
 static int append(char *buf, int cap, int n, const char *fmt, ...)
 {
@@ -777,9 +884,13 @@ int fs_creator_write(const fs_creator_t *c, char *buf, int cap, const char *name
         PUT("%-9s %s\n", key, vec);
     }
 
-    PUT("GRAIN     8\n");
-    PUT("GRAIN_SIZE 10\n");
-    PUT("HALATION  45 226 16\n");
+    /* Nothing forced. GRAIN 8 / HALATION 45 226 16 used to be written into
+     * every look, so a clean portrait created on the wheel came back with
+     * CineStill's red halation around every highlight. A look that wants
+     * grain or halation asks for it; the Film Look menu adds global grain. */
+    PUT("GRAIN     0\n");
+    PUT("GRAIN_SIZE 0\n");
+    PUT("HALATION  0 0 0\n");
 #undef PUT
     return n;
 }

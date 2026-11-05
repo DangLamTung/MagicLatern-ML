@@ -4074,6 +4074,11 @@ static int fs_darkroom_run(void) {
   fs_view_request = FS_VIEW_NONE;
   fs_dev_request = 0;
   fs_prov_active = 0;
+  {
+    int count = (film_active_count > 0) ? film_active_count : FILM_COUNT;
+    fs_anim.x = fs_clamp_i(film_sim_stock, 0, count - 1) * 65536;
+    fs_anim.v = 0;
+  }
   fs_screen_take();
   fs_log("darkroom: screen taken (vram=0x%x on=%d lv=%d gd=%d)",
          (unsigned)bmp_vram_real(), bmp_is_on(), lv, get_global_draw());
@@ -4083,6 +4088,7 @@ static int fs_darkroom_run(void) {
   fs_darkroom_active = 1;
   fs_darkroom_focus = 0;
   fs_darkroom_dirty = 1;
+  fs_strip_dirty = 0;
   fs_dev_request = 0;
 
   unsigned kc0 = fs_key_count;
@@ -4094,17 +4100,17 @@ static int fs_darkroom_run(void) {
       fs_darkroom_dirty = 0;
       break;
     }
-    if (get_ms_clock() - fs_anim_ms > 70) {
+    if (get_ms_clock() - fs_anim_ms > 30) {
       int dt = (int)(get_ms_clock() - fs_anim_ms);
       fs_anim_ms = get_ms_clock();
-      fs_anim_tick++;
-      fs_shelf_animate(dt);
-      fs_darkroom_dirty = 1;
+      if (fs_shelf_animate(dt))
+        fs_strip_dirty = 1;
     }
     if (fs_prov_tick())
       fs_darkroom_dirty = 1;
     if (fs_darkroom_dirty) {
       fs_darkroom_dirty = 0;
+      fs_strip_dirty = 0;
       fs_picture_sync();
       if (!fs_darkroom_logged) {
         fs_darkroom_logged = 1;
@@ -4113,6 +4119,9 @@ static int fs_darkroom_run(void) {
         fs_log_flush();
       }
       fs_paint(fs_darkroom_render);
+    } else if (fs_strip_dirty) {
+      fs_strip_dirty = 0;
+      fs_paint_band(FSG_STRIP_Y, FSG_STRIP_Y + FSG_STRIP_H, fs_gui_render_strip);
     }
     if (fs_key_count == kc0 && get_ms_clock() - t0 > 20000) {
       fs_log("darkroom: no key received in 20 s, releasing the screen");
@@ -4829,7 +4838,8 @@ static void fs_creator_render(void)
     /* fsg_draw_creator() drew the ring at the settled offset; tell the spin
      * that is where the beads now are */
     fs_creator_spin.valid = 0;
-    fsg_draw_creator_beads(&fs_creator, fs_creator_spring.x, &fs_creator_spin);
+    if (fs_creator_spring.x != fs_creator.sel * 65536)
+      fsg_draw_creator_beads(&fs_creator, fs_creator_spring.x, &fs_creator_spin);
   } else {
     fsg_draw_tone(&fs_creator);
   }
@@ -4844,7 +4854,13 @@ static void fs_creator_draw_beads(void)
 
 static void fs_creator_anim(void)
 {
-  if (fs_spring_step(&fs_creator_spring, fs_creator.sel * 65536, 30))
+  const int turn = FS_CREATOR_WEDGES * 65536;
+  int target = fs_creator.sel * 65536;
+  while (target - fs_creator_spring.x > turn / 2)
+    fs_creator_spring.x += turn;
+  while (fs_creator_spring.x - target > turn / 2)
+    fs_creator_spring.x -= turn;
+  if (fs_spring_step(&fs_creator_spring, target, 30))
     fs_paint_beads(fs_creator_draw_beads);
 }
 
@@ -4978,6 +4994,32 @@ static struct menu_entry fs_menu_name[] = {
     MENU_EOL,
 };
 
+/*
+ * A saved .fs is invisible until something names it: the shelf is built from
+ * ML/FILMS XML entries only (fs_load_films_xml never scans ML/FILM), so a look
+ * written as LOOK.fs existed on the card and could not be chosen. Writing the
+ * companion XML is what puts it on the shelf, and it survives a reboot.
+ */
+static void fs_register_look(const char *name, const char *desc)
+{
+  film_xml_t f;
+  char path[64];
+
+  if (!name || !name[0]) return;
+  memset(&f, 0, sizeof f);
+  snprintf(f.name, sizeof f.name, "%s", name);
+  snprintf(f.code, sizeof f.code, "%.11s", name);
+  snprintf(f.brand, sizeof f.brand, "User");
+  snprintf(f.type, sizeof f.type, "Created");
+  snprintf(f.description, sizeof f.description, "%s", desc ? desc : "MADE IN COLOR CREATOR");
+  f.base = 0x84;        /* Neutral: the look lives in the .fs, not the style */
+  f.sharpness = 3;
+  snprintf(path, sizeof path, FILM_DIR "/90_%.8s.xml", name);
+  fs_write_film_xml(path, &f);
+  fs_log("look: registered %s as %s", name, path);
+  fs_log_flush();
+}
+
 static void fs_creator_save_task(void *unused) {
   char buf[2048];
   char path[64];
@@ -5017,6 +5059,7 @@ static void fs_creator_save_task(void *unused) {
   }
   fs_log("creator: wrote %s (%d bytes, %d wedges)", path, n, FS_CREATOR_WEDGES);
   fs_log_flush();
+  fs_register_look(name, "MADE IN COLOR CREATOR");
   /* Reload the catalogue so the stock appears on the shelf without a reboot.
    * This walks the card, which is why it is here and not in the key handler. */
   fs_load_films_xml();
@@ -5265,6 +5308,7 @@ static void fs_fuji_save_task(void *unused) {
   }
   fs_log("fuji: wrote %s (%d bytes)", path, n);
   fs_log_flush();
+  fs_register_look(fs_fuji.name, "MADE IN FUJI RECIPE");
   fs_load_films_xml();
   fs_group_by_artwork();
   NotifyBox(1500, "Saved %s", path);
@@ -6617,12 +6661,14 @@ static int fs_key_handle(int k) {
     switch (act) {
     case ACT_LEFT:
     case ACT_UP:
+    case ACT_UP_WHEEL:
       film_sim_stock = (film_sim_stock + count - 1) % count;
       fs_apply_request = 1; /* the choice goes to the camera immediately */
       fs_gui_dirty = 1;
       return 0;
     case ACT_RIGHT:
     case ACT_DOWN:
+    case ACT_DOWN_WHEEL:
       film_sim_stock = (film_sim_stock + 1) % count;
       fs_apply_request = 1;
       fs_gui_dirty = 1;
@@ -6661,11 +6707,13 @@ static int fs_key_handle(int k) {
     int count = (film_active_count > 0) ? film_active_count : FILM_COUNT;
     switch (act) {
     case ACT_UP:
+    case ACT_UP_WHEEL:
       film_sim_stock = (film_sim_stock + count - 1) % count;
       fs_apply_request = 1;
       fs_darkroom_dirty = 1;
       return 0;
     case ACT_DOWN:
+    case ACT_DOWN_WHEEL:
       film_sim_stock = (film_sim_stock + 1) % count;
       fs_apply_request = 1;
       fs_darkroom_dirty = 1;

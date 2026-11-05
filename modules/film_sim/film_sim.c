@@ -41,6 +41,7 @@
 #include "fs_yuvlook.h"
 #include "gui/fsg.h"
 #include "gui/fsg_creator.h"
+#include "gui/fsg_wb.h"
 #include "gui/fs_spring.h"
 #include "se/se_cam.h"
 
@@ -1382,6 +1383,14 @@ static volatile int fs_creator_dirty;
 static volatile int fs_creator_save;
 static volatile int fs_creator_exit;
 static volatile int fs_creator_saving;
+
+/* The Fuji WB shift screen. */
+static volatile int fs_wb_active = 0;
+static volatile int fs_wb_dirty = 0;
+static volatile int fs_wb_apply = 0;
+static volatile int fs_wb_exit = 0;
+static volatile int fs_wb_applied = 0;
+static fs_wb_t       fs_wb;
 static fs_creator_t   fs_creator;
 
 static unsigned int fs_display_filter(unsigned int ctx) {
@@ -1460,7 +1469,8 @@ static unsigned int fs_display_filter(unsigned int ctx) {
    * It also kept fs_stat_frames moving, and the shelf's footer shows that
    * count -- see fs_lv_status_key() for what that did to the repaint rate.
    */
-  if (fs_gui_active || fs_darkroom_active || fs_creator_active) {
+  if (fs_gui_active || fs_darkroom_active || fs_creator_active ||
+      fs_wb_active) {
     fs_valid_frame = 0;
     return 0;
   }
@@ -2547,6 +2557,7 @@ static MENU_UPDATE_FUNC(fs_film_update) {
 #define FS_VIEW_DARKROOM 2
 #define FS_VIEW_DEVELOP 3
 #define FS_VIEW_CREATOR 4
+#define FS_VIEW_WB 5
 
 /*
  * Task stack for anything that can reach the develop.
@@ -2841,7 +2852,7 @@ static volatile int fs_want_playback;
 static void fs_screen_take(void);
 static void fs_screen_release(void);
 static MENU_SELECT_FUNC(fs_creator_trigger);
-static MENU_SELECT_FUNC(fs_wb_apply_trigger);
+static MENU_SELECT_FUNC(fs_wb_trigger);
 static void fs_push_wb_shift(void);
 
 #define FS_VIEW_MAXW 720
@@ -4751,10 +4762,7 @@ static MENU_SELECT_FUNC(fs_develop_trigger) { fs_ui_launch(FS_VIEW_DEVELOP); }
 
 static MENU_SELECT_FUNC(fs_creator_trigger) { fs_ui_launch(FS_VIEW_CREATOR); }
 
-static MENU_SELECT_FUNC(fs_wb_apply_trigger) {
-  /* A property write blocks on the ICU, so it goes to a task, not here. */
-  task_create("fs_wb_apply", 0.5, 0x1000, (void (*)(void *))fs_push_wb_shift, 0);
-}
+static MENU_SELECT_FUNC(fs_wb_trigger) { fs_ui_launch(FS_VIEW_WB); }
 
 /* ---------------------------------------------------------------- key handler
  */
@@ -4880,6 +4888,75 @@ static int fs_creator_run(void) {
   return FS_VIEW_NONE;
 }
 
+/* ---------------------------------------------------- Fuji WB shift
+ *
+ * The same two numbers as the menu entries, but as one decision rather than
+ * two sliders -- and, crucially, written into the CAMERA's white balance so
+ * they travel with the exposure the way a Fuji recipe does.
+ */
+
+static void fs_wb_render(void)
+{
+  fs_wb.ba = fs_clamp_i(film_sim_wbs_ba, -9, 9);
+  fs_wb.gm = fs_clamp_i(film_sim_wbs_gm, -9, 9);
+  fs_wb.moved  = (fs_wb.ba || fs_wb.gm);
+  fs_wb.applied = fs_wb_applied;
+  fsg_draw_wb(&fs_wb);
+}
+
+static void fs_wb_apply_task(void *unused) {
+  fs_log("fuji: apply task started");
+  fs_log_flush();
+  fs_push_wb_shift();
+  fs_wb_applied = 1;
+  fs_wb_dirty = 1;
+}
+
+static int fs_wb_run(void) {
+  if (fs_gui_active || fs_creator_active || fs_wb_active)
+    return FS_VIEW_NONE;
+
+  fs_log("wb: running (ba=%d gm=%d)", (int)film_sim_wbs_ba, (int)film_sim_wbs_gm);
+  fs_log_flush();
+  beep_times(1);
+
+  fs_screen_take();
+  fs_wb_active = 1;
+  fs_wb_dirty = 1;
+  fs_wb_exit = 0;
+  fs_wb_apply = 0;
+  fs_wb_applied = 0;
+
+  unsigned kc0 = fs_key_count;
+  uint32_t t0 = get_ms_clock();
+
+  while (!fs_wb_exit) {
+    if (fs_wb_dirty) {
+      fs_wb_dirty = 0;
+      fs_paint(fs_wb_render);
+    }
+    if (fs_wb_apply) {
+      fs_wb_apply = 0;
+      /* A property write blocks on the ICU round-trip, so it cannot happen in
+       * the key callback or under the BMP lock that fs_paint() holds. */
+      fs_wb_applied = 0;
+      task_create("fs_wb_apply", 0.5, 0x1000, fs_wb_apply_task, 0);
+      fs_wb_dirty = 1;
+    }
+    if (fs_key_count == kc0 && get_ms_clock() - t0 > 30000) {
+      fs_log("wb: no key in 30 s, releasing the screen");
+      break;
+    }
+    msleep(30);
+  }
+
+  fs_wb_active = 0;
+  fs_screen_release();
+  fs_log("wb: closed (ba=%d gm=%d)", (int)film_sim_wbs_ba, (int)film_sim_wbs_gm);
+  fs_log_flush();
+  return FS_VIEW_NONE;
+}
+
 static void fs_ui_task(void *arg) {
   int view = (int)(intptr_t)arg;
   fs_log("ui: task started view=%d", view);
@@ -4892,6 +4969,8 @@ static void fs_ui_task(void *arg) {
       view = fs_darkroom_run();
     else if (view == FS_VIEW_CREATOR)
       view = fs_creator_run();
+    else if (view == FS_VIEW_WB)
+      view = fs_wb_run();
     else if (view == FS_VIEW_DEVELOP) {
       fs_develop_run();
       /* back to the frame list: the panel stays in the module instead of
@@ -6117,6 +6196,34 @@ static int fs_key_handle(int k) {
   fs_last_act = act;
   fs_last_raw = k;
 
+  if (fs_wb_active) {
+    switch (act) {
+    case ACT_LEFT:  film_sim_wbs_ba = fs_clamp_i(film_sim_wbs_ba - 1, -9, 9);
+                    fs_wb_applied = 0; fs_wb_dirty = 1; return 0;
+    case ACT_RIGHT: film_sim_wbs_ba = fs_clamp_i(film_sim_wbs_ba + 1, -9, 9);
+                    fs_wb_applied = 0; fs_wb_dirty = 1; return 0;
+    case ACT_UP:    film_sim_wbs_gm = fs_clamp_i(film_sim_wbs_gm + 1, -9, 9);
+                    fs_wb_applied = 0; fs_wb_dirty = 1; return 0;
+    case ACT_DOWN:  film_sim_wbs_gm = fs_clamp_i(film_sim_wbs_gm - 1, -9, 9);
+                    fs_wb_applied = 0; fs_wb_dirty = 1; return 0;
+    case ACT_SET:
+      fs_wb_apply = 1;
+      return 0;
+    case ACT_Q:
+      film_sim_wbs_ba = 0;
+      film_sim_wbs_gm = 0;
+      fs_wb_applied = 0;
+      fs_wb_dirty = 1;
+      return 0;
+    case ACT_MENU:
+    case ACT_TRASH:
+      fs_wb_exit = 1;
+      return 0;
+    default:
+      return 0;
+    }
+  }
+
   if (fs_creator_active) {
     switch (act) {
     case ACT_LEFT:  fs_creator_step(&fs_creator, 1); fs_creator_dirty = 1; return 0;
@@ -6590,30 +6697,6 @@ static struct menu_entry fs_menu_debug[] = {
 };
 
 /* The develop side: choose a frame, a film and run the engine. */
-static struct menu_entry fs_menu_wb[] = {
-    {
-        .name = "B/A",
-        .priv = &film_sim_wbs_ba,
-        .min = -9,
-        .max = 9,
-        .help = "Blue (negative) to Amber (positive). One unit is 5 mireks.",
-    },
-    {
-        .name = "G/M",
-        .priv = &film_sim_wbs_gm,
-        .min = -9,
-        .max = 9,
-        .help = "Green (negative) to Magenta (positive).",
-    },
-    {
-        .name = "Apply to Camera",
-        .select = fs_wb_apply_trigger,
-        .icon_type = IT_ACTION,
-        .help = "Write the two shifts into PROP_WBS_BA / PROP_WBS_GM.",
-    },
-    MENU_EOL,
-};
-
 static struct menu_entry film_sim_menu[] = {
     {
         .name = "Film Shelf",
@@ -6710,11 +6793,10 @@ static struct menu_entry film_sim_menu[] = {
     },
     {
         .name = "Fuji WB Shift",
-        .select = menu_open_submenu,
+        .select = fs_wb_trigger,
         .icon_type = IT_ACTION,
-        .help = "Blue/Amber and Green/Magenta, pushed into the camera's own "
-                "white balance the way a Fuji recipe does.",
-        .children = fs_menu_wb,
+        .help = "A grid of Blue/Amber against Green/Magenta, written into the "
+                "camera's own white balance the way a Fuji recipe does.",
     },
     {
         .name = "Color Creator",

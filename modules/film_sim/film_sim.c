@@ -6292,7 +6292,16 @@ static unsigned int fs_keypress_raw_cbr(unsigned int event_ptr) {
      * the real code after all: undo the guess before acting on it. */
     if (fs_prov_active && get_ms_clock() - fs_prov_ms <= FS_PROVISIONAL_MS)
       fs_prov_undo();
-    if (fs_gui_active || fs_darkroom_active)
+    /*
+     * Every screen logs its raw keys, not just the shelf and the darkroom.
+     *
+     * The creator and the WB grid were missing from this test, so a screen
+     * whose dial handling I had just changed left no trace of which code the
+     * body actually sends -- and "spinning the dial does nothing" would have
+     * had to be diagnosed with no evidence at all. The log is the instrument
+     * here; a screen that can be driven must be a screen that can be read.
+     */
+    if (fs_gui_active || fs_darkroom_active || fs_creator_active || fs_wb_active)
       fs_log("rawkey p=%d act=%d", k, act);
   }
 

@@ -19,10 +19,10 @@ CURVE_G   0,12 128,130 255,244
 CURVE_B   0,10 64,66 128,124 192,186 255,238
 SAT      110
 HUE_SAT   96,112,78,100,104,100
-HUE_ROT   7,3,-13,-5,-4,-4
+HUE_ROT   7,3,8,-5,-4,-4
 HUE_LUM   105,107,93,98,96,103
-SPLIT_SH  16,7,-4
-SPLIT_HI  14,9,-7
+SPLIT_SH  4,2,-1
+SPLIT_HI  4,2,-2
 HALATION  46 228 16
 HAL_TINT  255,96,48
 # 14, not 20: at 20 the grain read as blotches on a smooth subject, which is

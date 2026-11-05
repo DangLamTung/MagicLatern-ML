@@ -6887,6 +6887,13 @@ static struct menu_entry fs_menu_develop[] = {
                 "FLC1..FLC4.JPG. Takes about 3 minutes.",
     },
     MENU_EOL,
+    {
+            .name = "View Last Develop",
+            .select = fs_view_last,
+            .icon_type = IT_ACTION,
+            .help = "Show the last developed frame on the camera's own screen. "
+                    "MENU or PLAY closes it.",
+        },
 };
 
 static struct menu_entry fs_menu_capture[] = {
@@ -7037,6 +7044,14 @@ static struct menu_entry fs_menu_fuji[] = {
         .help = "Present in a Fuji recipe, not wired yet.",
     },
     {
+        .name = "WB Grid",
+        .select = fs_wb_trigger,
+        .icon_type = IT_ACTION,
+        .help = "The 2-D Blue/Amber vs Green/Magenta grid, written into the "
+                "camera's own white balance the way a Fuji recipe does. The "
+                "R/B row above is the same offset as numbers.",
+    },
+    {
         .name = "Save Recipe",
         .select = fs_fuji_save_trigger,
         .icon_type = IT_ACTION,
@@ -7047,6 +7062,27 @@ static struct menu_entry fs_menu_fuji[] = {
 };
 
 static struct menu_entry fs_menu_look[] = {
+    {
+            .name = "Film Shelf",
+            .select = fs_gui_open,
+            .icon_type = IT_ACTION,
+            .help = "Open the shelf, choose a film, SET applies it. The choice "
+                    "stays as the active stock after you leave.",
+        },
+    {
+            .name = "Stock",
+            .select = fs_film_next,
+            .select_Q = fs_film_prev,
+            .update = fs_film_update,
+            .help = "SET: next stock, Q: previous stock.",
+        },
+    {
+            .name = "Level",
+            .priv = &film_sim_level,
+            .max = FS_LEVEL_RAW,
+            .update = fs_level_update,
+            .help = "1 picture style, 2 style + grade, 3 raw develop.",
+        },
     {
         .name = "Strength",
         .priv = &film_sim_strength,
@@ -7118,72 +7154,131 @@ static struct menu_entry fs_menu_live[] = {
 };
 
 /*
- * A top-level menu of its own, not a submenu of the film simulation: these are
- * the tools that make a look of your own, and looking for the colour creator
- * under a menu called "Film Dev" is what the user asked to stop doing.
+ * User Look: the looks the Color Creator saved, applied by name. The shelf
+ * lists every stock as well, so "which of my four looks was that" used to
+ * mean reading a shelf of thirty-four. These four rows say it outright.
  */
-static struct menu_entry fs_menu_usercolor[] = {
+static int fs_user_slot[4] = { 0, 1, 2, 3 };
+
+static void fs_user_look_apply(int slot)
+{
+  char want[12];
+  int i, n = (film_active_count > 0) ? film_active_count : FILM_COUNT;
+
+  if (slot <= 0) snprintf(want, sizeof want, "WHEEL");
+  else           snprintf(want, sizeof want, "WHEEL%d", slot + 1);
+
+  for (i = 0; i < n; i++) {
+    if (!strcasecmp(film_active_table[i].name, want)) {
+      film_sim_stock = i;
+      fs_apply_film_now();
+      beep_times(1);
+      fs_log("userlook: applied '%s' (stock %d)", film_active_table[i].name, i);
+      fs_log_flush();
+      NotifyBox(1200, "Look: %s", film_active_table[i].name);
+      return;
+    }
+  }
+  fs_log("userlook: '%s' not in the film list (%d stocks)", want, n);
+  fs_log_flush();
+  NotifyBox(1800, "%s.fs not found -- not saved, or its NAME was changed", want);
+}
+
+static MENU_SELECT_FUNC(fs_user_look_select) {
+  (void)delta;
+  fs_user_look_apply(*(const int *)priv);
+}
+
+static struct menu_entry fs_menu_userlook[] = {
     {
-        .name = "Color Creator",
-        .select = fs_creator_trigger,
+        .name = "Apply WHEEL",
+        .priv = &fs_user_slot[0],
+        .select = fs_user_look_select,
         .icon_type = IT_ACTION,
-        .help = "Twelve wedges, 30 degrees apart, plus highlight/shadow. PLAY "
-                "writes the look to ML/FILM/WHEEL*.fs and the shelf reloads.",
+        .help = "Make ML/FILM/WHEEL.fs the active look.",
     },
     {
-        .name = "Creator Slot",
+        .name = "Apply WHEEL2",
+        .priv = &fs_user_slot[1],
+        .select = fs_user_look_select,
+        .icon_type = IT_ACTION,
+        .help = "Make ML/FILM/WHEEL2.fs the active look.",
+    },
+    {
+        .name = "Apply WHEEL3",
+        .priv = &fs_user_slot[2],
+        .select = fs_user_look_select,
+        .icon_type = IT_ACTION,
+        .help = "Make ML/FILM/WHEEL3.fs the active look.",
+    },
+    {
+        .name = "Apply WHEEL4",
+        .priv = &fs_user_slot[3],
+        .select = fs_user_look_select,
+        .icon_type = IT_ACTION,
+        .help = "Make ML/FILM/WHEEL4.fs the active look.",
+    },
+    {
+        .name = "Save Into",
         .priv = &fs_creator_slot,
         .min = 0, .max = 3,
         .choices = fs_slot_names,
-        .help = "Which file the Color Creator saves: ML/FILM/WHEEL.fs, then "
-                "WHEEL2..WHEEL4. One fixed name overwrote the last look.",
-    },
-    {
-        .name = "Fuji WB Shift",
-        .select = fs_wb_trigger,
-        .icon_type = IT_ACTION,
-        .help = "A grid of Blue/Amber against Green/Magenta, written into the "
-                "camera's own white balance the way a Fuji recipe does.",
-    },
-    {
-        .name = "Fuji Recipe",
-        .select = menu_open_submenu,
-        .icon_type = IT_ACTION,
-        .help = "A bundle of Fuji's IMAGE QUALITY SETTING items, saved as a "
-                ".fs -- the C1..C7 slot equivalent.",
-        .children = fs_menu_fuji,
+        .help = "Which file the Color Creator writes: WHEEL, then WHEEL2..4.",
     },
     MENU_EOL,
 };
 
 static struct menu_entry film_sim_menu[] = {
     {
-        .name = "Film Shelf",
-        .select = fs_gui_open,
+        .name = "Film Look",
+        .select = menu_open_submenu,
         .icon_type = IT_ACTION,
-        .help = "Open the shelf, choose a film, SET applies it. The choice "
-                "stays as the active stock after you leave.",
+        .help = "Pick a stock and how much of it: shelf, stock, level, "
+                "strength, saturation, grain and padding.",
+        .children = fs_menu_look,
     },
     {
-        .name = "View Last Develop",
-        .select = fs_view_last,
+        .name = "User Look",
+        .select = menu_open_submenu,
         .icon_type = IT_ACTION,
-        .help = "Show the last developed frame on the camera's own screen. "
-                "MENU or PLAY closes it.",
+        .help = "The looks the Color Creator saved, applied by name.",
+        .children = fs_menu_userlook,
     },
     {
-        .name = "Level",
-        .priv = &film_sim_level,
-        .max = FS_LEVEL_RAW,
-        .update = fs_level_update,
-        .help = "1 picture style, 2 style + grade, 3 raw develop.",
+        .name = "Custom Look",
+        .select = fs_creator_trigger,
+        .icon_type = IT_ACTION,
+        .help = "The 12-wedge colour creator: saturation, luminance and hue "
+                "per colour, plus highlight/shadow. PLAY saves into User Look.",
     },
     {
-        .name = "Stock",
-        .select = fs_film_next,
-        .select_Q = fs_film_prev,
-        .update = fs_film_update,
-        .help = "SET: next stock, Q: previous stock.",
+        .name = "Recipe",
+        .select = menu_open_submenu,
+        .icon_type = IT_ACTION,
+        .help = "A Fuji recipe -- the IMAGE QUALITY SETTING bundle, saved as a "
+                ".fs -- plus the Blue/Amber vs Green/Magenta WB grid.",
+        .children = fs_menu_fuji,
+    },
+    {
+        .name = "Aspect",
+        .priv = &film_sim_aspect,
+        .max = FS_ASPECT_COUNT - 1,
+        .choices = fs_aspect_names,
+        .update = fs_aspect_update,
+        .help = "One setting for both halves of what-you-see-is-what-you-get: "
+                "the bars on LiveView and the window a developed file is cut "
+                "to are this same mode. Canon's own JPEG is always the full "
+                "3:2 sensor, which a module cannot change, so a file the camera "
+                "shoots is 3:2 with the bars; a file Develop writes is cut to "
+                "the shape the bars showed.",
+    },
+    {
+        .name = "Develop",
+        .select = menu_open_submenu,
+        .icon_type = IT_ACTION,
+        .help = "Develop now: this photo, a marked set, a 4-way comparison, "
+                "the darkroom, or watch for new frames.",
+        .children = fs_menu_develop,
     },
     {
         .name = "Photo",
@@ -7200,38 +7295,11 @@ static struct menu_entry film_sim_menu[] = {
         .help = "Tick this photo for the develop set. Q: clear the set.",
     },
     {
-        .name = "Framing",
-        .priv = &film_sim_aspect,
-        .max = FS_ASPECT_COUNT - 1,
-        .choices = fs_aspect_names,
-        .update = fs_aspect_update,
-        .help = "One setting for both halves of what-you-see-is-what-you-get: "
-                "the bars on LiveView and the window a developed file is cut "
-                "to use the same mode. Canon's own JPEG is always the full 3:2 "
-                "sensor, which a module cannot change, so a file the camera "
-                "shoots is 3:2 with the bars; a file Develop writes is cut to "
-                "the shape the bars showed.",
-    },
-    {
-        .name = "Look",
-        .select = menu_open_submenu,
-        .icon_type = IT_ACTION,
-        .help = "Strength, saturation, grain and padding.",
-        .children = fs_menu_look,
-    },
-    {
         .name = "LiveView",
         .select = menu_open_submenu,
         .icon_type = IT_ACTION,
         .help = "Preview grading, frame and overlay options.",
         .children = fs_menu_live,
-    },
-    {
-        .name = "Develop",
-        .select = menu_open_submenu,
-        .icon_type = IT_ACTION,
-        .help = "Shelf, darkroom, develop now, 4-way comparison.",
-        .children = fs_menu_develop,
     },
     {
         .name = "Capture",
@@ -7608,7 +7676,6 @@ static unsigned int film_sim_init() {
    * entries in ML's menu bar for one module. Everything is reachable from the
    * one list below, one level deeper. */
   menu_add("Film Dev", film_sim_menu, COUNT(film_sim_menu) - 1);
-  menu_add("User Color", fs_menu_usercolor, COUNT(fs_menu_usercolor) - 1);
   if (fs_test_flag()) {
     task_create("fs_test", 0x1e, 0x4000, fs_test_task, 0);
   }

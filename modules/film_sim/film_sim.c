@@ -4852,6 +4852,8 @@ static void fs_creator_render(void)
     fs_creator_spin.valid = 0;
     if (fs_creator_spring.x != fs_creator.sel * 65536)
       fsg_draw_creator_beads(&fs_creator, fs_creator_spring.x, &fs_creator_spin);
+  } else if (fs_creator.screen == 2) {
+    fsg_draw_fx(&fs_creator);
   } else {
     fsg_draw_tone(&fs_creator);
   }

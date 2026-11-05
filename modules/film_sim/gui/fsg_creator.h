@@ -34,6 +34,14 @@ typedef struct
     int shadow;
     int highlight;
 
+    /* FX screen: what a look asks for instead of being handed it. The writer
+     * used to force GRAIN 8 / HALATION 45 226 16 on every look. */
+    int grain;        /* 0..100  */
+    int grain_size;   /* 0..100  */
+    int halation;     /* 0..100  */
+    int chrome;       /* 0 off, 1 weak, 2 strong */
+    int fx_blue;      /* 0 off, 1 weak, 2 strong */
+
     /*
      * Save feedback lives on this screen. It cannot be a NotifyBox: the
      * creator repaints the whole frame from its own loop, so a toast drawn by
@@ -84,6 +92,7 @@ void fsg_draw_creator_wheel(const fs_creator_t *c, int offset_q16);
 extern const char *const fs_creator_tabs[3];
 extern const int fs_creator_tab_field[3];
 void fsg_draw_tone(const fs_creator_t *c);
+void fsg_draw_fx(const fs_creator_t *c);
 
 /*
  * Format the creator's state as a .fs recipe. Returns the length written, or

@@ -480,6 +480,42 @@ void fsg_draw_creator_beads(const fs_creator_t *c, int offset_q16,
     fsg_draw_creator_wheel(c, offset_q16);
 }
 
+void fsg_draw_fx(const fs_creator_t *c)
+{
+    static const char *const label[5] = {
+        "GRAIN", "GRAIN SIZE", "HALATION", "COLOR CHROME", "FX BLUE"
+    };
+    static const int lo[5] = { 0, 0, 0, 0, 0 };
+    static const int hi[5] = { 100, 100, 100, 2, 2 };
+    char right[24], value[32];
+    int i;
+
+    fsg_fill(0, 0, FSG_W, FSG_H, FSG_BG);
+    snprintf(right, sizeof right, "%d / %d", c->sel + 1, FS_CREATOR_WEDGES);
+    header("COLOR CREATOR", c->stock, right);
+
+    fsg_text(24, 76, FSG_T_LARGE, FSG_AMBER, FSG_BG, "FX");
+    fsg_text(90, 84, FSG_T_SMALL, FSG_GREY, FSG_BG,
+             "what this look asks for (nothing is forced)");
+
+    for (i = 0; i < 5; i++) {
+        int v = (i == 0) ? c->grain : (i == 1) ? c->grain_size
+              : (i == 2) ? c->halation : (i == 3) ? c->chrome : c->fx_blue;
+        int y = 120 + i * 52;
+        fsg_text(24, y, FSG_T_SMALL, i == c->field ? FSG_AMBER : FSG_GREY,
+                 FSG_BG, "%s", label[i]);
+        if (i >= 3)
+            snprintf(value, sizeof value, "%s", v == 0 ? "OFF" : (v == 1 ? "WEAK" : "STRONG"));
+        else
+            snprintf(value, sizeof value, "%d", v);
+        fsg_text(600, y, FSG_T_SMALL, FSG_WHITE, FSG_BG, "%s", value);
+        bar_bipolar(24, y + 18, 640, 16, v, lo[i], hi[i], lo[i],
+                    i == c->field ? FSG_AMBER : FSG_RED_MID, i == c->field);
+    }
+    footer("UP/DOWN value    SET field    PLAY save",
+           "Q: wheel/tone/fx    MENU back");
+}
+
 void fsg_draw_creator(const fs_creator_t *c)
 {
     char right[32];
@@ -819,12 +855,14 @@ void fs_creator_step(fs_creator_t *c, int act)
             for (t = 0; t < 3; t++)
                 if (fs_creator_tab_field[t] == c->field) break;
             c->field = fs_creator_tab_field[(t + 1) % 3];
+        } else if (c->screen == 2) {
+            c->field = (c->field + 1) % 5;
         } else {
             c->field = (c->field + 1) % 2;
         }
         break;
     case A_Q:
-        c->screen ^= 1;
+        c->screen = (c->screen + 1) % 3;
         c->field = 0;
         break;
     default:
@@ -884,13 +922,19 @@ int fs_creator_write(const fs_creator_t *c, char *buf, int cap, const char *name
         PUT("%-9s %s\n", key, vec);
     }
 
-    /* Nothing forced. GRAIN 8 / HALATION 45 226 16 used to be written into
-     * every look, so a clean portrait created on the wheel came back with
-     * CineStill's red halation around every highlight. A look that wants
-     * grain or halation asks for it; the Film Look menu adds global grain. */
-    PUT("GRAIN     0\n");
-    PUT("GRAIN_SIZE 0\n");
-    PUT("HALATION  0 0 0\n");
+    /* Nothing forced: what the FX screen says, and only that. GRAIN 8 and
+     * HALATION 45 226 16 used to be written into every look, so a clean
+     * portrait came back with CineStill's red halation around every highlight. */
+    PUT("GRAIN     %d\n", c->grain);
+    PUT("GRAIN_SIZE %d\n", c->grain_size);
+    if (c->halation > 0)
+        PUT("HALATION  %d 226 16\n", c->halation);
+    else
+        PUT("HALATION  0 0 0\n");
+    if (c->chrome)
+        PUT("COLOR_CHROME %s\n", c->chrome > 1 ? "STRONG" : "WEAK");
+    if (c->fx_blue)
+        PUT("FX_BLUE   %s\n", c->fx_blue > 1 ? "STRONG" : "WEAK");
 #undef PUT
     return n;
 }

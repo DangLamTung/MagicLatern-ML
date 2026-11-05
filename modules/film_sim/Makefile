@@ -15,7 +15,7 @@ SE_OBJS = $(addprefix $(BUILD_DIR)/se_,$(addsuffix .o,$(SE_ENGINE_SRC))) \
           $(BUILD_DIR)/se_libgcc.o
 
 GUI_OBJS = $(BUILD_DIR)/gui_fsg.o $(BUILD_DIR)/gui_fsg_dat.o \
-           $(BUILD_DIR)/gui_fsg_ml.o
+           $(BUILD_DIR)/gui_fsg_ml.o $(BUILD_DIR)/gui_fsg_creator.o
 
 MODULE_OBJS = $(BUILD_DIR)/film_sim.o $(BUILD_DIR)/fs_yuvhook.o \
               $(BUILD_DIR)/fs_yuvlook.o $(SE_OBJS) $(GUI_OBJS)

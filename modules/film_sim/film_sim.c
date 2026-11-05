@@ -40,6 +40,7 @@
 #include "fs_yuvhook.h"
 #include "fs_yuvlook.h"
 #include "gui/fsg.h"
+#include "gui/fsg_creator.h"
 #include "gui/fs_spring.h"
 #include "se/se_cam.h"
 
@@ -80,6 +81,17 @@ static CONFIG_INT("film.sim.lut", film_sim_lut, 0);
  * preset tables. Off by default: it is ~3.5x the lookups and the
  * camera's frame budget for that is unmeasured. */
 static CONFIG_INT("film.sim.lv3d", film_sim_lv3d, 0);
+/*
+ * Fuji-style white balance shift: the same thing a Fuji recipe calls WB Shift
+ * (Blue/Amber, Green/Magenta), pushed into the CAMERA's own setting rather
+ * than into the look. That is the difference that matters -- it moves the
+ * white point DIGIC uses, so it travels with the exposure and the picture
+ * style, exactly as it does on a Fuji body.
+ *
+ * -9..+9, one unit is 5 mireks on the Kelvin axis. 0/0 is no shift.
+ */
+static CONFIG_INT("film.sim.wbs_ba", film_sim_wbs_ba, 0);
+static CONFIG_INT("film.sim.wbs_gm", film_sim_wbs_gm, 0);
 static CONFIG_INT("film.sim.fps", film_sim_fps, 30);
 static CONFIG_INT("film.sim.user1", film_sim_user1,
                   1); /* inject into User 1 + select it */
@@ -1364,6 +1376,14 @@ static volatile int fs_darkroom_active;
  * the display filter has to stand down while it is set. */
 static volatile int fs_develop_active = 0;
 
+/* defined further down, next to the screen that owns them */
+static volatile int fs_creator_active;
+static volatile int fs_creator_dirty;
+static volatile int fs_creator_save;
+static volatile int fs_creator_exit;
+static volatile int fs_creator_saving;
+static fs_creator_t   fs_creator;
+
 static unsigned int fs_display_filter(unsigned int ctx) {
   /* ctx = 0: report whether we want to run (must be cheap) */
   if (ctx == 0) {
@@ -1440,7 +1460,7 @@ static unsigned int fs_display_filter(unsigned int ctx) {
    * It also kept fs_stat_frames moving, and the shelf's footer shows that
    * count -- see fs_lv_status_key() for what that did to the repaint rate.
    */
-  if (fs_gui_active || fs_darkroom_active) {
+  if (fs_gui_active || fs_darkroom_active || fs_creator_active) {
     fs_valid_frame = 0;
     return 0;
   }
@@ -1943,6 +1963,29 @@ static int fs_inject_user1(int preset, const char *name) {
       c_saturation, c_color_tone);
 
   return fs_stat_inject_rc;
+}
+
+/*
+ * Push the recipe's WB shift into the camera.
+ *
+ * Both properties are signed 8-bit in a 4-byte word (property.h: "signed
+ * 8-bit, len=4"), which is why ML's own shoot.c masks with 0xFF before the
+ * request: a bare negative int puts 0xFFFFFF in the low three bytes and the
+ * firmware reads the wrong field.
+ *
+ * Property writes block on an ICU round-trip, so this is called from the
+ * backup task and from the menu handler's action, never from a key callback.
+ */
+static void fs_push_wb_shift(void)
+{
+  int ba = fs_clamp_i(film_sim_wbs_ba, -9, 9) & 0xFF;
+  int gm = fs_clamp_i(film_sim_wbs_gm, -9, 9) & 0xFF;
+
+  prop_request_change(PROP_WBS_BA, &ba, 4);
+  prop_request_change(PROP_WBS_GM, &gm, 4);
+  fs_log("fuji: WB shift B/A %+d, G/M %+d written to the camera",
+         (int)film_sim_wbs_ba, (int)film_sim_wbs_gm);
+  fs_log_flush();
 }
 
 static void fs_slot_backup_task(void *unused) {
@@ -2503,6 +2546,7 @@ static MENU_UPDATE_FUNC(fs_film_update) {
 #define FS_VIEW_SHELF 1
 #define FS_VIEW_DARKROOM 2
 #define FS_VIEW_DEVELOP 3
+#define FS_VIEW_CREATOR 4
 
 /*
  * Task stack for anything that can reach the develop.
@@ -2518,6 +2562,7 @@ static MENU_UPDATE_FUNC(fs_film_update) {
 #define FS_DEV_STACK 0x8000
 
 static volatile int fs_gui_active = 0;
+
 /* Redraw request. The key handler only raises this; the shelf task owns the
  * drawing, so the screen is never written from two contexts at once. */
 static volatile int fs_gui_dirty = 0;
@@ -2795,6 +2840,9 @@ static volatile int fs_want_playback;
 
 static void fs_screen_take(void);
 static void fs_screen_release(void);
+static MENU_SELECT_FUNC(fs_creator_trigger);
+static MENU_SELECT_FUNC(fs_wb_apply_trigger);
+static void fs_push_wb_shift(void);
 
 #define FS_VIEW_MAXW 720
 #define FS_VIEW_MAXH 480
@@ -4701,6 +4749,13 @@ static void fs_develop_run(void) {
 
 static MENU_SELECT_FUNC(fs_develop_trigger) { fs_ui_launch(FS_VIEW_DEVELOP); }
 
+static MENU_SELECT_FUNC(fs_creator_trigger) { fs_ui_launch(FS_VIEW_CREATOR); }
+
+static MENU_SELECT_FUNC(fs_wb_apply_trigger) {
+  /* A property write blocks on the ICU, so it goes to a task, not here. */
+  task_create("fs_wb_apply", 0.5, 0x1000, (void (*)(void *))fs_push_wb_shift, 0);
+}
+
 /* ---------------------------------------------------------------- key handler
  */
 
@@ -4709,6 +4764,122 @@ static MENU_SELECT_FUNC(fs_develop_trigger) { fs_ui_launch(FS_VIEW_DEVELOP); }
  * Tests run = one task, one screen owner. The menu handlers and the key handler
  * only publish what should happen next here; nothing else creates tasks.
  */
+/* ------------------------------------------------------- color creator
+ *
+ * A full-screen editor, not a HUD over LiveView: the LV plane is 1440x480 of
+ * uncached memory and the display filter already costs 89 ms a frame, so a
+ * screen that redraws on a key press is the only one that can keep up. What
+ * OM shows behind the wheel is the live scene; what this shows is the wheel.
+ */
+
+static void fs_creator_render(void)
+{
+  if (fs_creator.screen == 0)
+    fsg_draw_creator(&fs_creator);
+  else
+    fsg_draw_tone(&fs_creator);
+}
+
+/* Runs with the panel released. Formats the recipe off the key path. */
+static void fs_creator_save_task(void *unused) {
+  char buf[2048];
+  char path[64];
+  const char *name = "WHEEL";
+  int n;
+
+  fs_log("creator: save task started");
+  fs_log_flush();
+
+  n = fs_creator_write(&fs_creator, buf, sizeof buf, name);
+  if (n < 0) {
+    NotifyBox(1800, "Creator: recipe did not fit");
+    fs_log("creator: format failed");
+    fs_log_flush();
+    fs_creator_saving = 0;
+    return;
+  }
+  snprintf(path, sizeof path, "ML/FILM/%s.fs", name);
+  FIO_CreateDirectory("ML/FILM");
+  {
+    FILE *f = FIO_CreateFile(path);
+    int wrote = f ? FIO_WriteFile(f, buf, (size_t)n) : -1;
+    if (f) FIO_CloseFile(f);
+    if (wrote != n) {
+      NotifyBox(1800, "Creator: write failed");
+      fs_log("creator: writing '%s' gave %d of %d bytes", path, wrote, n);
+      fs_log_flush();
+      return;
+    }
+  }
+  fs_log("creator: wrote %s (%d bytes, %d wedges)", path, n, FS_CREATOR_WEDGES);
+  fs_log_flush();
+  /* Reload the catalogue so the stock appears on the shelf without a reboot.
+   * This walks the card, which is why it is here and not in the key handler. */
+  fs_load_films_xml();
+  fs_group_by_artwork();
+  NotifyBox(1500, "Saved ML/FILM/%s.fs", name);
+  fs_creator.dirty = 0;
+  fs_creator_saving = 0;
+  fs_creator_dirty = 1;   /* repaint with UNSAVED cleared */
+}
+
+static int fs_creator_run(void) {
+  if (fs_gui_active || fs_creator_active)
+    return FS_VIEW_NONE;
+
+  fs_log("creator: running");
+  fs_log_flush();
+  beep_times(1);
+
+  fs_creator_defaults(&fs_creator, "BASE: CLASSIC CHROME");
+  fs_creator.sel = 0;
+  fs_creator.field = 0;
+  fs_creator.screen = 0;
+
+  fs_screen_take();
+  fs_creator_active = 1;
+  fs_creator_dirty = 1;
+  fs_creator_exit = 0;
+  fs_creator_save = 0;
+
+  unsigned kc0 = fs_key_count;
+  uint32_t t0 = get_ms_clock();
+
+  while (!fs_creator_exit) {
+    if (fs_creator_dirty) {
+      fs_creator_dirty = 0;
+      fs_paint(fs_creator_render);
+    }
+    if (fs_creator_save) {
+      fs_creator_save = 0;
+      /* Spawn it and STAY here. Returning out of the screen and back in
+       * would re-run fs_creator_defaults() and silently throw away every
+       * wedge the user just set -- which is what the first version did.
+       * The panel is only locked inside fs_paint(), so the write below
+       * happens between paints, not under the lock. */
+      if (!fs_creator_saving) {
+        fs_creator_saving = 1;
+        task_create("fs_creator_save", 0.5, 0x4000, fs_creator_save_task, 0);
+      }
+      fs_creator_dirty = 1;
+    }
+    /* Nothing here animates, so the loop only has to notice keys. The 20 s
+     * heartbeat matters as much as it does on the shelf: a screen nobody can
+     * leave is a bricked camera. */
+    if (fs_key_count == kc0 && get_ms_clock() - t0 > 30000) {
+      fs_log("creator: no key in 30 s, releasing the screen");
+      break;
+    }
+    msleep(30);
+  }
+
+  fs_creator_active = 0;
+  fs_screen_release();
+  fs_log("creator: closed");
+  fs_log_flush();
+  return FS_VIEW_NONE;
+}
+
 static void fs_ui_task(void *arg) {
   int view = (int)(intptr_t)arg;
   fs_log("ui: task started view=%d", view);
@@ -4719,6 +4890,8 @@ static void fs_ui_task(void *arg) {
       view = fs_shelf_run();
     else if (view == FS_VIEW_DARKROOM)
       view = fs_darkroom_run();
+    else if (view == FS_VIEW_CREATOR)
+      view = fs_creator_run();
     else if (view == FS_VIEW_DEVELOP) {
       fs_develop_run();
       /* back to the frame list: the panel stays in the module instead of
@@ -5944,6 +6117,31 @@ static int fs_key_handle(int k) {
   fs_last_act = act;
   fs_last_raw = k;
 
+  if (fs_creator_active) {
+    switch (act) {
+    case ACT_LEFT:  fs_creator_step(&fs_creator, 1); fs_creator_dirty = 1; return 0;
+    case ACT_RIGHT: fs_creator_step(&fs_creator, 2); fs_creator_dirty = 1; return 0;
+    case ACT_UP:    fs_creator_step(&fs_creator, 3); fs_creator_dirty = 1; return 0;
+    case ACT_DOWN:  fs_creator_step(&fs_creator, 4); fs_creator_dirty = 1; return 0;
+    case ACT_Q:     fs_creator_step(&fs_creator, 6); fs_creator_dirty = 1; return 0;
+    case ACT_SET:
+      /* On the tone screen SET is "save"; on the wheel it walks the three
+       * fields. Both are a step, so the same action, told apart by screen. */
+      if (fs_creator.screen == 1) { fs_creator_save = 1; return 0; }
+      fs_creator_step(&fs_creator, 5);
+      fs_creator_dirty = 1;
+      return 0;
+    case ACT_PLAY:
+      fs_creator_save = 1;
+      return 0;
+    case ACT_MENU:
+    case ACT_TRASH:
+      fs_creator_exit = 1;
+      return 0;
+    default:
+      return 0;
+    }
+  }
   if (fs_gui_active) {
     int count = (film_active_count > 0) ? film_active_count : FILM_COUNT;
     switch (act) {
@@ -6392,6 +6590,30 @@ static struct menu_entry fs_menu_debug[] = {
 };
 
 /* The develop side: choose a frame, a film and run the engine. */
+static struct menu_entry fs_menu_wb[] = {
+    {
+        .name = "B/A",
+        .priv = &film_sim_wbs_ba,
+        .min = -9,
+        .max = 9,
+        .help = "Blue (negative) to Amber (positive). One unit is 5 mireks.",
+    },
+    {
+        .name = "G/M",
+        .priv = &film_sim_wbs_gm,
+        .min = -9,
+        .max = 9,
+        .help = "Green (negative) to Magenta (positive).",
+    },
+    {
+        .name = "Apply to Camera",
+        .select = fs_wb_apply_trigger,
+        .icon_type = IT_ACTION,
+        .help = "Write the two shifts into PROP_WBS_BA / PROP_WBS_GM.",
+    },
+    MENU_EOL,
+};
+
 static struct menu_entry film_sim_menu[] = {
     {
         .name = "Film Shelf",
@@ -6485,6 +6707,21 @@ static struct menu_entry film_sim_menu[] = {
                 "develop against 8.8, with 5x less chroma error (host test "
                 "se/hosttest/lv3d.c). Costs about 3.3x the table lookups, so "
                 "watch FILMSIM.LOG's grade_ms before leaving it on.",
+    },
+    {
+        .name = "Fuji WB Shift",
+        .select = menu_open_submenu,
+        .icon_type = IT_ACTION,
+        .help = "Blue/Amber and Green/Magenta, pushed into the camera's own "
+                "white balance the way a Fuji recipe does.",
+        .children = fs_menu_wb,
+    },
+    {
+        .name = "Color Creator",
+        .select = fs_creator_trigger,
+        .icon_type = IT_ACTION,
+        .help = "Twelve wedges, 30 degrees apart, plus highlight/shadow. "
+                "Saves ML/FILM/WHEEL.fs and reloads the shelf.",
     },
     {
         .name = "Develop",
@@ -6974,6 +7211,8 @@ MODULE_CONFIG(film_sim_art)
 MODULE_CONFIG(film_sim_shotgrade)
 MODULE_CONFIG(film_sim_lut)
 MODULE_CONFIG(film_sim_lv3d)
+MODULE_CONFIG(film_sim_wbs_ba)
+MODULE_CONFIG(film_sim_wbs_gm)
 MODULE_CONFIG(film_sim_neutralcap)
 MODULE_CONFIG(film_sim_sharp)
 MODULE_CONFIG(film_sim_direct)

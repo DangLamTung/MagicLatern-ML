@@ -15,6 +15,9 @@
 
 /* ---- colours ---------------------------------------------------------- */
 
+/* radial steps per wedge: one palette entry each, see register_palette */
+#define CREATOR_BANDS   4
+
 static const char *const wedge_name[FS_CREATOR_WEDGES] = {
     "RED", "ORANGE", "YELLOW", "LIME", "GREEN", "SPRING",
     "CYAN", "AZURE", "BLUE", "VIOLET", "MAGENTA", "ROSE",
@@ -58,11 +61,31 @@ int fs_creator_wedge_rgb(int i)
     return (r << 16) | (g << 8) | b;
 }
 
+/*
+ * The wheel is filled, so one colour per wedge is not enough: each wedge is
+ * drawn as four concentric bands and the bands need their own entries. The
+ * overlay palette has 175 (FSG_PAL_N, entries 80..254) and only the first
+ * sixteen are ever borrowed by another screen, so 48 is safe -- nothing else
+ * references slots 16..47.
+ *
+ * The steps are eighths, not a real blend: the panel indexes a palette, there
+ * is no interpolation, so a "gradient" is only ever this many flat steps.
+ */
+static const int wedge_shade[CREATOR_BANDS] = { 72, 128, 190, 255 };
+
 void fs_creator_register_palette(void)
 {
-    int pal[FS_CREATOR_WEDGES], i;
-    for (i = 0; i < FS_CREATOR_WEDGES; i++) pal[i] = fs_creator_wedge_rgb(i);
-    fsg_pal(pal, FS_CREATOR_WEDGES);
+    int pal[FS_CREATOR_WEDGES * CREATOR_BANDS], i, b;
+    for (i = 0; i < FS_CREATOR_WEDGES; i++) {
+        int rgb = fs_creator_wedge_rgb(i);
+        for (b = 0; b < CREATOR_BANDS; b++) {
+            int k = wedge_shade[b], r = (rgb >> 16) & 255;
+            int g = (rgb >> 8) & 255, bl = rgb & 255;
+            pal[i * CREATOR_BANDS + b] =
+                ((r * k / 255) << 16) | ((g * k / 255) << 8) | (bl * k / 255);
+        }
+    }
+    fsg_pal(pal, FS_CREATOR_WEDGES * CREATOR_BANDS);
 }
 
 static const int sin30[12] = { 0, 500, 866, 1000, 866, 500,
@@ -91,6 +114,8 @@ static void line_fill(int x0, int y0, int x1, int y1, int c)
 
 /* sin/cos for a tenth of a degree, from the 30-degree table, in 0.001 units.
  * Index 0 is +x, so angle 900 is straight up. */
+static int isqrt_i(int v);
+
 static void sincos10(int ang, int *s10, int *c10)
 {
     int idx, f, a, b, id2;
@@ -103,6 +128,26 @@ static void sincos10(int ang, int *s10, int *c10)
     id2 = (idx + 3) % 12;
     a = sin30[id2]; b = sin30[(id2 + 1) % 12];
     *c10 = a + (b - a) * f / 300;
+
+    /*
+     * Interpolating (sin, cos) as a straight line between two 30-degree knots
+     * gives the right DIRECTION but a vector only cos(15) = 0.966 long, so
+     * every point between knots was drawn 3.4% too close to the centre: the
+     * filled sectors ended short of the perimeter they were meant to meet,
+     * leaving a dark ring of slivers at every corner. Scale the vector back to
+     * unit length -- the divisions are only paid for the interpolated angles,
+     * the twelve knots return early.
+     */
+    if (f) {
+        int mag2 = *s10 * *s10 + *c10 * *c10;
+        if (mag2 > 0) {
+            int mag = isqrt_i(mag2);
+            if (mag > 0) {
+                *s10 = *s10 * 1000 / mag;
+                *c10 = *c10 * 1000 / mag;
+            }
+        }
+    }
 }
 
 static void dodec_point(int cx, int cy, int r, int ang10, int *ox, int *oy)
@@ -227,6 +272,50 @@ static void footer(const char *keys)
 const char *const fs_creator_tabs[3] = { "Saturation", "Luminance", "Hue" };
 const int fs_creator_tab_field[3] = { 0, 2, 1 };
 
+/*
+ * Filled sectors: the radar is a colour wheel, not twelve dots. A scanline
+ * fill is one fsg_fill per row per polygon, which is the cheapest way to put
+ * ~39k coloured pixels on the panel without a per-pixel call.
+ */
+#define CREATOR_SLOT(i, b) FSG_PIX((i) * CREATOR_BANDS + (b))
+
+static void poly_fill(const int *xs, const int *ys, int n, int colour)
+{
+    int i, j, y, ymin = ys[0], ymax = ys[0];
+
+    for (i = 1; i < n; i++) {
+        if (ys[i] < ymin) ymin = ys[i];
+        if (ys[i] > ymax) ymax = ys[i];
+    }
+    for (y = ymin; y <= ymax; y++) {
+        int hit[8], nh = 0;
+        for (i = 0, j = n - 1; i < n; j = i++) {
+            if ((ys[i] > y) != (ys[j] > y)) {
+                int dy = ys[i] - ys[j];
+                if (nh < 8)
+                    hit[nh++] = xs[j] +
+                        (int)((long long)(y - ys[j]) * (xs[i] - xs[j]) / dy);
+            }
+        }
+        for (i = 0; i < nh; i++)
+            for (j = i + 1; j < nh; j++)
+                if (hit[j] < hit[i]) { int t = hit[i]; hit[i] = hit[j]; hit[j] = t; }
+        for (i = 0; i + 1 < nh; i += 2)
+            fsg_fill(hit[i], y, hit[i + 1] - hit[i] + 1, 1, colour);
+    }
+}
+
+/* one radial band of one wedge, as a quadrilateral */
+static void sector_band(int cx, int cy, int r0, int r1, int a1, int a2, int colour)
+{
+    int xs[4], ys[4];
+    dodec_point(cx, cy, r0, a1, &xs[0], &ys[0]);
+    dodec_point(cx, cy, r1, a1, &xs[1], &ys[1]);
+    dodec_point(cx, cy, r1, a2, &xs[2], &ys[2]);
+    dodec_point(cx, cy, r0, a2, &xs[3], &ys[3]);
+    poly_fill(xs, ys, 4, colour);
+}
+
 /* ---- the wheel -------------------------------------------------------- */
 
 /* One wedge's bead. `sel` draws the halo and the inner disc. */
@@ -275,31 +364,56 @@ void fsg_draw_creator_wheel(const fs_creator_t *c, int offset_q16)
            FSG_CREATOR_RING_Y1 - FSG_CREATOR_RING_Y0, FSG_BG);
 
   disc(cx, cy, CREATOR_R_OUT, FSG_PANEL_DARK);
+
+  /* the colour field: twelve wedges, each in four flat steps from the hub out
+   * to the perimeter, so the disc reads as a wheel of colour the way the
+   * reference does -- the value polygon is drawn over it */
+  {
+    /* the field ends ON the perimeter, not past it: colour outside the rim
+     * line left ragged slivers at every dodecagon corner */
+    int b, r0 = CREATOR_R_IN + 2, r1 = CREATOR_R_MAX;
+    int step = (r1 - r0) / CREATOR_BANDS;
+    for (b = 0; b < CREATOR_BANDS; b++) {
+      int lo = r0 + b * step, hi = (b == CREATOR_BANDS - 1) ? r1 : lo + step;
+      for (i = 0; i < FS_CREATOR_WEDGES; i++) {
+        int a = wedge_angle(i, offset_q16);
+        sector_band(cx, cy, lo, hi, a - 150, a + 150, CREATOR_SLOT(i, b));
+      }
+    }
+  }
   disc(cx, cy, CREATOR_R_IN, FSG_BG_DEEP);
 
   for (i = 0; i < FS_CREATOR_WEDGES; i++)
     dodec_point(cx, cy, wedge_radius(c, i, c->field),
                 wedge_angle(i, offset_q16), &px[i], &py[i]);
 
-  /* the coloured perimeter: each edge in its wedge's colour, two rows thick */
+  /* the coloured perimeter, drawn on the fill's OWN outer chord. It used to
+   * join the wedge centres, which is 15 degrees off the corners the fill ends
+   * at -- two dodecagons a half step apart, and slivers of dark between them. */
   for (i = 0; i < FS_CREATOR_WEDGES; i++) {
-    int x1, y1, x2, y2;
-    dodec_point(cx, cy, CREATOR_R_MAX, wedge_angle(i, offset_q16), &x1, &y1);
-    dodec_point(cx, cy, CREATOR_R_MAX, wedge_angle(i + 1, offset_q16), &x2, &y2);
-    line_fill(x1, y1, x2, y2, FSG_PIX(i));
-    line_fill(x1, y1 + 1, x2, y2 + 1, FSG_PIX(i));
+    int x1, y1, x2, y2, a = wedge_angle(i, offset_q16);
+    dodec_point(cx, cy, CREATOR_R_MAX, a - 150, &x1, &y1);
+    dodec_point(cx, cy, CREATOR_R_MAX, a + 150, &x2, &y2);
+    line_fill(x1, y1, x2, y2, CREATOR_SLOT(i, CREATOR_BANDS - 1));
+    line_fill(x1, y1 + 1, x2, y2 + 1, CREATOR_SLOT(i, CREATOR_BANDS - 1));
   }
 
   /* the value polygon, then its dots: a dot needs a dark skirt or one that
    * lands on the perimeter -- same colour, same rows -- disappears into it */
   for (i = 0; i < FS_CREATOR_WEDGES; i++) {
     int j = (i + 1) % FS_CREATOR_WEDGES;
+    /* a dark shadow under a white edge: white on the bright outer band is a
+     * one-pixel line of near-equal luminance and disappears at arm's length */
+    line_fill(px[i], py[i] + 1, px[j], py[j] + 1, FSG_BG_DEEP);
     line_fill(px[i], py[i], px[j], py[j], FSG_WHITE);
   }
   for (i = 0; i < FS_CREATOR_WEDGES; i++) {
-    circle_fill(px[i], py[i], i == c->sel ? 8 : 6,
+    /* a ring with a dark centre, so the node still reads where it sits on the
+     * brightest band of its own colour */
+    circle_fill(px[i], py[i], i == c->sel ? 9 : 6,
+                i == c->sel ? FSG_AMBER : CREATOR_SLOT(i, CREATOR_BANDS - 1));
+    circle_fill(px[i], py[i], i == c->sel ? 5 : 3,
                 i == c->sel ? FSG_AMBER : FSG_BG_DEEP);
-    circle_fill(px[i], py[i], i == c->sel ? 5 : 4, FSG_PIX(i));
   }
 
   /* the twelve numbers, outside the perimeter */
@@ -358,7 +472,8 @@ void fsg_draw_creator(const fs_creator_t *c)
     snprintf(right, sizeof right, "%d / %d", c->sel + 1, FS_CREATOR_WEDGES);
     header(c->stock, right, c->sel);
 
-    fs_creator_register_palette();
+    /* the tabs use the fixed constants; the wheel registers the wedge palette
+     * itself, in fsg_draw_creator_wheel(), and that is its only owner */
 
     /* the three series tabs */
     {

@@ -974,7 +974,8 @@ static void fs_sync() {
       ((unsigned)fs_clamp_i(film_sim_enable, 0, 1) & 1);
   /* Saturation gets its own word: the first signature has no spare bits and a
    * wrapped signature is worse than a second compare. */
-  unsigned int sig2 = (unsigned)fs_clamp_i(film_sim_satboost, 20, 200) & 0xFF;
+  unsigned int sig2 = ((unsigned)fs_clamp_i(film_sim_satboost, 20, 200) & 0xFF) |
+                       ((unsigned)fs_clamp_i(film_sim_grainsize + 1, 0, 101) << 8);
 
   if (fs_signature_valid && sig == fs_signature && sig2 == fs_signature2)
     return;
@@ -4725,8 +4726,8 @@ static void fs_develop_run(void) {
   se_cam_set_pad32(film_sim_pad);
   se_cam_set_strength(film_sim_strength);
   se_cam_set_satboost(film_sim_satboost);
-  fs_yuvlook_set_satboost(film_sim_satboost);
   se_cam_set_grainsize(film_sim_grainsize);
+  fs_yuvlook_set_satboost(film_sim_satboost);
   if (fs_level() == FS_LEVEL_RAW) {
     dev_err = se_cam_develop_raw(cr2, stk, tmp, 2, fs_bath_progress,
                                  fs_develop_note, NULL);
@@ -5123,7 +5124,6 @@ static void fs_creator_save_task(void *unused) {
   fs_creator.save_err = 0;
   beep_times(1);
   fs_creator.dirty = 0;
-  fs_creator_saving = 0;
   fs_creator_dirty = 1;   /* repaint with SAVED showing */
 
   /* Now the slow part, behind the badge, so the shelf has the new stock
@@ -5137,6 +5137,9 @@ static void fs_creator_save_task(void *unused) {
            (int)(t1 - t0), (int)(get_ms_clock() - t1), film_active_count);
     fs_log_flush();
   }
+  /* only now is it safe for another save: the catalogue the shelf reads is
+   * consistent again, and a second save cannot race this one. */
+  fs_creator_saving = 0;
 }
 
 static int fs_creator_run(void) {
@@ -5673,6 +5676,7 @@ static void fs_develop_batch(void) {
       se_cam_set_pad32(film_sim_pad);
       se_cam_set_strength(film_sim_strength);
       se_cam_set_satboost(film_sim_satboost);
+  se_cam_set_grainsize(film_sim_grainsize);
       e = se_cam_develop_raw(cr2, stock, tmp, 2, fs_bath_progress,
                              fs_develop_note, NULL);
       if (e != SE_OK) {
@@ -5687,6 +5691,7 @@ static void fs_develop_batch(void) {
       se_cam_set_pad32(film_sim_pad);
       se_cam_set_strength(film_sim_strength);
       se_cam_set_satboost(film_sim_satboost);
+  se_cam_set_grainsize(film_sim_grainsize);
       e = se_cam_develop(cr2, stock, tmp, fs_bath_progress, fs_develop_note,
                          NULL);
     }
@@ -5859,6 +5864,7 @@ static se_err fs_develop_photo(const char *photo, const char *stock_path,
   se_cam_set_pad32(film_sim_pad);
   se_cam_set_strength(film_sim_strength);
   se_cam_set_satboost(film_sim_satboost);
+  se_cam_set_grainsize(film_sim_grainsize);
   if (film_sim_level == FS_LEVEL_RAW) {
     e = se_cam_develop_raw(cr2, stock_path, tmp, 2, prog, fs_develop_note,
                            NULL);
@@ -8075,6 +8081,7 @@ MODULE_CONFIG(film_sim_preset)
 MODULE_CONFIG(film_sim_strength)
 MODULE_CONFIG(film_sim_satboost)
 MODULE_CONFIG(film_sim_grain)
+MODULE_CONFIG(film_sim_grainsize)
 MODULE_CONFIG(film_sim_fps)
 MODULE_CONFIG(film_sim_user1)
 MODULE_CONFIG(film_sim_dbglog)

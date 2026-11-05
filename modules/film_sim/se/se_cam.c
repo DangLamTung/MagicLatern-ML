@@ -1828,6 +1828,12 @@ se_err se_cam_develop_raw(const char *cr2_path, const char *stock_path,
     se_look_from_stock(&st, scale, &lk);
     apply_look_options(&lk);
     se_develop_out_size(&info, scale, &ow, &oh);
+    /*
+     * The framing window. Without this the struct stays zeroed, crop_y1 is 0,
+     * and look_emit() drops every row: a full-RAW develop wrote an empty file.
+     * The mRAW branch has always done this (see the call above).
+     */
+    se_cam_aspect_window(ow, oh, &d.crop_x0, &d.crop_x1, &d.crop_y0, &d.crop_y1);
     d.width = ow;
     d.height = oh;
     d.rows_done = 0;

@@ -320,6 +320,10 @@ void se_look_from_stock(const se_stock *s, int scale, se_look *lk) {
    * coarse end.
    */
   lk->grain_scale = scale;
+  /* The base value, not the [RAW] override: se_look_from_stock() has no
+   * source argument, so se_stock_grain(s, src) cannot be called here. The
+   * amount above has the same limitation. Plumbing a source through this
+   * function touches every caller including four host tools. */
   lk->grain_cell = 1 + (int)(s->grain_size / 12.0f);
   if (scale > 1)
     lk->grain_cell = (lk->grain_cell + scale - 1) / scale;
@@ -1200,6 +1204,9 @@ static void grain_row(const se_look *lk, uint8_t *row, int w, int y) {
    * as emulsion and started reading as sensor noise, which is the one
    * thing grain must not look like. */
   int amp = (lk->grain * SE_GRAIN_AMP) / 100;
+  /* The two octaves peak at 1.75x what one 16-bit lattice did, so scale the
+   * amplitude once here rather than dividing per pixel. */
+  amp = amp * 4 / 7;
   if (amp <= 0)
     return;
   /*
@@ -1235,6 +1242,8 @@ static void grain_row(const se_look *lk, uint8_t *row, int w, int y) {
     int left = cell, fleft = fine, fx = 0, ifx = 256;
     int a = grain_val(xc, yc, 0x5EEDu), b = grain_val(xc + 1, yc, 0x5EEDu);
     int c = grain_val(xc, yc + 1, 0x5EEDu), d = grain_val(xc + 1, yc + 1, 0x5EEDu);
+    /* octave 2 is constant across a fine cell: hash it once, not per pixel */
+    int fn = grain_val(fxc, fyc, 0x9A31u) >> 2;
     for (x = 0; x < w; x++) {
       int n, top, bot;
       /* >>8 here, and >>8 again below: (a*ifx + b*fx) reaches 2^23, and
@@ -1242,8 +1251,8 @@ static void grain_row(const se_look *lk, uint8_t *row, int w, int y) {
        * the extreme lattice values. */
       top = (a * ifx + b * fx) >> 8;
       bot = (c * ifx + d * fx) >> 8;
-      n = (((top * ify + bot * fy) >> 8) * 3) >> 1;
-      n += grain_val(fxc, fyc, 0x9A31u) >> 2;
+      n = (((top * ify + bot * fy) >> 8) * 3) >> 1;   /* 1.5x: interpolation costs variance */
+      n += fn;
       {
         /* +16384 rounds instead of flooring: >> on a negative value
          * floors, which biased every grained pixel down by ~1 level. */
@@ -1281,6 +1290,7 @@ static void grain_row(const se_look *lk, uint8_t *row, int w, int y) {
       if (--fleft <= 0) {
         fleft = fine;
         fxc++;
+        fn = grain_val(fxc, fyc, 0x9A31u) >> 2;
       }
     }
   }

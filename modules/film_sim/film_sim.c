@@ -5104,13 +5104,20 @@ static void fs_creator_save_task(void *unused) {
   fs_log("creator: wrote %s (%d bytes, %d wedges)", path, n, FS_CREATOR_WEDGES);
   fs_log_flush();
   fs_register_look(name, "MADE IN COLOR CREATOR");
-  /* Reload the catalogue so the stock appears on the shelf without a reboot.
-   * This walks the card, which is why it is here and not in the key handler. */
-  fs_load_films_xml();
-  fs_group_by_artwork();
-  /* No NotifyBox: the creator repaints the whole frame from its own loop and
+
+  /*
+   * Report success BEFORE rebuilding the catalogue.
+   *
+   * The bytes are on the card at this point -- that is what "saved" means. The
+   * two reloads below walk ML/FILMS (85 XML files) and the artwork directory,
+   * which is seconds on this card, and they used to run first: the user waited
+   * through a full catalogue rebuild before the screen said SAVED, which is
+   * exactly "saving is slow".
+   *
+   * No NotifyBox: the creator repaints the whole frame from its own loop and
    * would erase it. The screen draws this itself, and keeps it until the next
-   * value change. */
+   * value change.
+   */
   snprintf(fs_creator_saved_name, sizeof fs_creator_saved_name, "%.8s", name);
   fs_creator.saved_name = fs_creator_saved_name;
   fs_creator.saved = 1;
@@ -5118,7 +5125,19 @@ static void fs_creator_save_task(void *unused) {
   beep_times(1);
   fs_creator.dirty = 0;
   fs_creator_saving = 0;
-  fs_creator_dirty = 1;   /* repaint with UNSAVED cleared */
+  fs_creator_dirty = 1;   /* repaint with SAVED showing */
+
+  /* Now the slow part, behind the badge, so the shelf has the new stock
+   * without a reboot. Timed, because "it feels slow" needs a number. */
+  {
+    uint32_t t0 = get_ms_clock();
+    fs_load_films_xml();
+    uint32_t t1 = get_ms_clock();
+    fs_group_by_artwork();
+    fs_log("creator: catalogue reload %d ms, artwork %d ms (%d stocks)",
+           (int)(t1 - t0), (int)(get_ms_clock() - t1), film_active_count);
+    fs_log_flush();
+  }
 }
 
 static int fs_creator_run(void) {
@@ -5366,9 +5385,19 @@ static void fs_fuji_save_task(void *unused) {
   fs_log("fuji: wrote %s (%d bytes)", path, n);
   fs_log_flush();
   fs_register_look(fs_fuji.name, "MADE IN FUJI RECIPE");
-  fs_load_films_xml();
-  fs_group_by_artwork();
+  /* Confirm first, rebuild the catalogue after -- same reason as the creator:
+   * the bytes are on the card, and the reload walks every XML on it. */
   NotifyBox(1500, "Saved %s", path);
+  fs_log("fuji: wrote %s", path);
+  fs_log_flush();
+  {
+    uint32_t t0 = get_ms_clock();
+    fs_load_films_xml();
+    fs_log("fuji: catalogue reload %d ms (%d stocks)",
+           (int)(get_ms_clock() - t0), film_active_count);
+    fs_log_flush();
+  }
+  fs_group_by_artwork();
   fs_fuji_save = 0;
 }
 

@@ -103,6 +103,9 @@ static const char *fs_own_lut_path(void)
  * preset tables. Off by default: it is ~3.5x the lookups and the
  * camera's frame budget for that is unmeasured. */
 static CONFIG_INT("film.sim.lv3d", film_sim_lv3d, 0);
+/* Defined up here because fs_sync() decides from it whether the bars are
+ * honest: only a develop-and-replace shot is actually cropped. */
+static CONFIG_INT("film.sim.replace", film_sim_replace, 1);
 /*
  * Fuji-style white balance shift: the same thing a Fuji recipe calls WB Shift
  * (Blue/Amber, Green/Magenta), pushed into the CAMERA's own setting rather
@@ -997,8 +1000,14 @@ static void fs_sync() {
   if (film_sim_yuvrows > 0 || film_sim_lv3d) {
     fs_yuvlook_dirty = 1;
   }
-  /* Framing is an aspect mode: the hook needs it even when nothing else moved. */
-  fs_yuvhook_bars(film_sim_aspect);
+  /* Framing is an aspect mode: the hook needs it even when nothing else moved.
+   *
+   * But the bars must describe the FILE. Canon writes its own JPEG at 3:2 and a
+   * module cannot crop it, so a bar that promises 65:24 while the card gets 3:2
+   * is a lie the user composes against. They only tell the truth when the shot
+   * is developed and replaces Canon's JPEG. */
+  fs_yuvhook_bars(film_sim_replace ? film_sim_aspect : 0);
+
   /*
    * Which 3D LUT the develop uses.
    *
@@ -2304,7 +2313,6 @@ static CONFIG_INT("film.sim.auto", film_sim_auto, 0);
  *
  * Off by default. It destroys a file the camera wrote, so it is opt-in.
  */
-static CONFIG_INT("film.sim.replace", film_sim_replace, 1);
 /*
  * May a shot that incremented the hook's counter skip the develop?
  *

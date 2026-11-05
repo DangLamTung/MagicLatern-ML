@@ -818,7 +818,10 @@ static void grade_row(const se_look *lk, uint8_t *row, int w)
      */
     if (lk->chrome || lk->fx_blue) {
       int chroma;
-      int h = hue1536(rr, gg, bb, &chroma);
+      /* Scene hue, like the per-hue stage below: a curve's own cast on
+       * neutral grey is not a saturated colour, and probing the print made
+       * Color Chrome react to the tone curve rather than to the subject. */
+      int h = hue1536(o0, o1, o2, &chroma);
       if (h >= 0 && chroma > 8) {
         int y  = luma8(rr, gg, bb);
         int u  = bb - y, v = rr - y;

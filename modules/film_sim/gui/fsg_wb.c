@@ -24,25 +24,32 @@
  * Getting these backwards would draw a grid that pushes the opposite cast to
  * the camera, which is the one thing this screen exists to prevent.
  */
-static int cell_colour(int ba, int gm)
+static int cell_colour(int r, int b)
 {
-    int r = 128 + ba * 7;          /* amber up, blue down */
-    int g = 128 + gm * 6;          /* green up, magenta down */
-    int b = 128 - ba * 7;
-    int dark = (ba * ba + gm * gm) / 6;
+    /*
+     * Fuji's two axes as tints:
+     *   RED +  adds red, RED -  adds cyan (green and blue together)
+     *   BLUE + adds blue, BLUE - adds yellow (red and green together)
+     * so the top of the grid is blue everywhere and the right edge is warm,
+     * which is what the four labels say.
+     */
+    int rr = 128 + r * 7 + (b < 0 ? -b * 4 : 0);
+    int gg = 128 - r * 4 + (b < 0 ? -b * 4 : b * 2);
+    int bb = 128 + b * 7 - r * 4;
+    int dark = (r * r + b * b) / 6;
 
-    if (r < 40) r = 40;
-    if (r > 235) r = 235;
-    if (g < 40) g = 40;
-    if (g > 235) g = 235;
-    if (b < 40) b = 40;
-    if (b > 235) b = 235;
+    if (rr < 40) rr = 40;
+    if (rr > 235) rr = 235;
+    if (gg < 40) gg = 40;
+    if (gg > 235) gg = 235;
+    if (bb < 40) bb = 40;
+    if (bb > 235) bb = 235;
     /* the rim reads brighter so the grid has an edge without a border fill */
     if (dark > 18) dark = 18;
-    r = r * (30 - dark) / 30;
-    g = g * (30 - dark) / 30;
-    b = b * (30 - dark) / 30;
-    return (r << 16) | (g << 8) | b;
+    rr = rr * (30 - dark) / 30;
+    gg = gg * (30 - dark) / 30;
+    bb = bb * (30 - dark) / 30;
+    return (rr << 16) | (gg << 8) | bb;
 }
 
 static void header(const char *right)
@@ -86,8 +93,8 @@ void fsg_draw_wb(const fs_wb_t *w)
 
     /* the crosshair: what is selected */
     {
-        int px = gx + (w->ba + 9) * CELL;
-        int py = gy + (9 - w->gm) * CELL;
+        int px = gx + (w->r + 9) * CELL;
+        int py = gy + (9 - w->b) * CELL;
         int c = w->applied ? FSG_GREEN : FSG_AMBER;
 
         fsg_fill(px - 1, py - 1, CELL + 1, CELL + 1, c);
@@ -96,11 +103,11 @@ void fsg_draw_wb(const fs_wb_t *w)
     }
 
     /* axis labels, outside the grid */
-    fsg_text(gx, gy - 22, FSG_T_SMALL, FSG_GREY, FSG_BG, "GREEN");
-    fsg_text(gx + GRID_PX - 54, gy - 22, FSG_T_SMALL, FSG_GREY, FSG_BG, "MAGENTA");
-    fsg_text(gx - 66, gy + GRID_PX / 2 - 6, FSG_T_SMALL, FSG_GREY, FSG_BG, "BLUE");
+    fsg_text(gx, gy - 22, FSG_T_SMALL, FSG_GREY, FSG_BG, "BLUE +");
+    fsg_text(gx + GRID_PX - 60, gy - 22, FSG_T_SMALL, FSG_GREY, FSG_BG, "BLUE -");
+    fsg_text(gx - 52, gy + GRID_PX / 2 - 6, FSG_T_SMALL, FSG_GREY, FSG_BG, "RED -");
     fsg_text(gx + GRID_PX + 8, gy + GRID_PX / 2 - 6, FSG_T_SMALL, FSG_GREY, FSG_BG,
-             "AMBER");
+             "RED +");
 
     /*
      * Three numbers, because there are three of them and confusing any two is
@@ -119,19 +126,20 @@ void fsg_draw_wb(const fs_wb_t *w)
         if (abs_gm > 9) abs_gm = 9;
         if (abs_gm < -9) abs_gm = -9;
 
-        fsg_text(x, y, FSG_T_SMALL, FSG_GREY, FSG_BG, "OFFSET");
-        snprintf(buf, sizeof buf, "%+d", w->ba);
+        /* the recipe's own numbers, R then B, as Fuji prints them */
+        fsg_text(x, y, FSG_T_SMALL, FSG_GREY, FSG_BG, "RED / BLUE");
+        snprintf(buf, sizeof buf, "%+d", w->r);
         fsg_text(x, y + 16, FSG_T_LARGE, FSG_AMBER, FSG_BG, "%s", buf);
-        snprintf(buf, sizeof buf, "%+d", w->gm);
+        snprintf(buf, sizeof buf, "%+d", w->b);
         fsg_text(x + 66, y + 16, FSG_T_LARGE, FSG_AMBER, FSG_BG, "%s", buf);
 
-        fsg_text(x, y + 56, FSG_T_SMALL, FSG_GREY, FSG_BG, "STOCK");
+        fsg_text(x, y + 56, FSG_T_SMALL, FSG_GREY, FSG_BG, "STOCK B/A, G/M");
         snprintf(buf, sizeof buf, "%+d", w->stock_ba);
         fsg_text(x, y + 72, FSG_T_MED, FSG_GREY, FSG_BG, "%s", buf);
         snprintf(buf, sizeof buf, "%+d", w->stock_gm);
         fsg_text(x + 66, y + 72, FSG_T_MED, FSG_GREY, FSG_BG, "%s", buf);
 
-        fsg_text(x, y + 104, FSG_T_SMALL, FSG_GREY, FSG_BG, "CAMERA GETS");
+        fsg_text(x, y + 104, FSG_T_SMALL, FSG_GREY, FSG_BG, "CAMERA B/A, G/M");
         snprintf(buf, sizeof buf, "%+d", abs_ba);
         fsg_text(x, y + 120, FSG_T_MED, FSG_WHITE, FSG_BG, "%s", buf);
         snprintf(buf, sizeof buf, "%+d", abs_gm);

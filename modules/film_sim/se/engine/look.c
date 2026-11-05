@@ -284,6 +284,10 @@ void se_look_from_stock(const se_stock *s, int scale, se_look *lk) {
       lk->hue_any = 1;
   }
 
+  /* weak 128, strong 256: half and full */
+  lk->chrome  = (s->color_chrome > 0 ? s->color_chrome : 0) * 128;
+  lk->fx_blue = (s->fx_blue > 0 ? s->fx_blue : 0) * 128;
+
   lk->sat = s->sat_set ? (int)(s->sat * 2.56f + 0.5f) : 256;
   if (lk->sat < 0)
     lk->sat = 0;
@@ -794,6 +798,73 @@ static void grade_row(const se_look *lk, uint8_t *row, int w)
      * whole block is skipped when a stock asks for nothing per-hue,
      * rather than relying on it round-tripping to the same bytes.
      */
+    /*
+     * Color Chrome and FX Blue need the hue and the chroma but not the
+     * per-hue tables, so they get their own gate: a recipe can ask for
+     * Strong Color Chrome with no HUE_SAT line at all, and before this it
+     * was ignored because the whole block was gated on hue_any.
+     */
+    if (lk->chrome || lk->fx_blue) {
+      int chroma;
+      int h = hue1536(rr, gg, bb, &chroma);
+      if (h >= 0 && chroma > 8) {
+        int y  = luma8(rr, gg, bb);
+        int u  = bb - y, v = rr - y;
+        int amt = lk->chrome;
+
+        /*
+         * The chroma weighting is the point. A pixel with 20 levels of
+         * colour gets a fifth of the effect a pixel with 100 does, so muted
+         * greens stay muted while a red flower deepens -- which is exactly
+         * how Color Chrome is described and what a saturation slider cannot
+         * do.
+         */
+        {
+          int w = chroma > 96 ? 256 : (chroma * 256) / 96;
+          amt = (lk->chrome * w) >> 8;
+        }
+
+        /* FX Blue is the same statement on blue hues only: the 12-sector
+         * wheel puts blue at 8, so weight by distance from it. */
+        if (lk->fx_blue) {
+          int sec = h / (1536 / SE_HUE_SECTORS);
+          int d = sec > 8 ? sec - 8 : 8 - sec;
+          if (d > SE_HUE_SECTORS / 2) d = SE_HUE_SECTORS - d;
+          /* full at blue, zero two sectors away */
+          if (d < 2) {
+            int bw = d == 0 ? 256 : 128;
+            /* the same chroma weight as Color Chrome: a pale sky should not
+             * be pushed as hard as a saturated one */
+            int w = chroma > 96 ? 256 : (chroma * 256) / 96;
+            amt += (((lk->fx_blue * bw) >> 8) * w) >> 8;
+          }
+        }
+
+        if (amt) {
+          int v2, u2;
+          u = u + ((u * amt) >> 10);      /* up to +25% chroma at strong */
+          v = v + ((v * amt) >> 10);
+          /*
+           * u and v here are RAW differences (B-Y, R-Y), not the scaled Cb/Cr
+           * that ycc_px() takes -- so the inverse is y + difference, not
+           * y + (454*diff)>>8. Using the scaled inverse multiplied the effect
+           * by 454/256 and made a weak Color Chrome look like a strong one;
+           * the host measurement caught it as muted colours gaining MORE
+           * chroma than saturated ones, which is the opposite of the claim.
+           */
+          v2 = v; u2 = u;
+          rr = clamp8(y + v2);
+          bb = clamp8(y + u2);
+          {
+            int t2 = 77 * v2 + 29 * u2;
+            int sg = t2 < 0 ? -1 : 1;
+            if (t2 < 0) t2 = -t2;
+            gg = clamp8(y - (sg * (int)(((long long)t2 * 27963) >> 22)));
+          }
+        }
+      }
+    }
+
     if (lk->hue_any) {
       int chroma;
       int h = hue1536(rr, gg, bb, &chroma);

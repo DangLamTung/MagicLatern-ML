@@ -125,6 +125,15 @@ typedef struct {
 
     int      hue_any;        /* 0 when nothing per-hue is set: skip it all */
 
+    /*
+     * Fuji's COLOR_CHROME and FX_BLUE as strengths in 0..256 (weak 128,
+     * strong 256). Applied to chroma that is ALREADY there, in proportion to
+     * how much there is, so a dull colour is left dull -- that is the whole
+     * difference between these and the global saturation.
+     */
+    int      chrome;         /* 0 = off */
+    int      fx_blue;        /* 0 = off, only hues around blue */
+
     /* Split tone. Signed per channel, in 0..255 units at full strength.
      * The shadow tint is weighted by (255 - luma) and the highlight tint
      * by luma, so they meet in the middle rather than fighting. */

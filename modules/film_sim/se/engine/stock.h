@@ -110,6 +110,20 @@ typedef struct {
     float grain;            /* 0..100, applied after DIGIC; 0 = none */
     float grain_size;       /* 0..100 -> a 1..5 pixel cell           */
 
+    /*
+     * Fuji's two colour-character controls, which a recipe names explicitly
+     * and which no curve can express.
+     *
+     * COLOR_CHROME deepens colours that are ALREADY saturated and leaves dull
+     * ones alone -- it is a statement about the shape of the chroma response,
+     * not its level, which is why a global saturation cannot stand in for it.
+     * FX_BLUE is the same statement restricted to blues.
+     *
+     * 0 = off, 1 = weak, 2 = strong, the three values a Fuji body offers.
+     */
+    int color_chrome;
+    int fx_blue;
+
     /* Saturation, 100 = unchanged. `sat_set` distinguishes "SAT 0",
      * which means monochrome, from a stock file that never said SAT. */
     float sat;

@@ -146,6 +146,27 @@ static void parse_vec(sc *t, float *out, int n)
  * 0.5 percent of saturation over 3600 angles, which is integer rounding, not
  * a change of shape.
  */
+/*
+ * OFF / WEAK / STRONG, or 0..2, because a Fuji recipe lists either the word
+ * or nothing at all and a hand-written .fs should not have to quote it.
+ */
+static int sc_level(sc *t)
+{
+    char w[16];
+    int n = 0;
+
+    sc_sp(t);
+    while (t->p < t->end && *t->p && *t->p != ' ' && *t->p != '\t' &&
+           *t->p != '\n' && *t->p != '\r' && n < 15)
+        w[n++] = *t->p++;
+    w[n] = 0;
+    if (!n) return 0;
+    if (w[0] == '0' || w[0] == 'o' || w[0] == 'O') return 0;      /* off     */
+    if (w[0] == '1' || w[0] == 'w' || w[0] == 'W') return 1;      /* weak    */
+    if (w[0] == '2' || w[0] == 's' || w[0] == 'S') return 2;      /* strong  */
+    return 0;
+}
+
 static int parse_hue_vec(sc *t, float *out)
 {
     float v[SE_HUE_SECTORS];
@@ -257,6 +278,10 @@ se_err se_stock_parse(const char *text, size_t len, se_stock *s)
         else if (key_is(w, "GRAIN"))    { sc_float(&t, &s->grain); }
         else if (key_is(w, "GRAIN_SIZE")) { sc_float(&t, &s->grain_size); }
         else if (key_is(w, "SAT"))      { if (sc_float(&t, &s->sat)) s->sat_set = 1; }
+        else if (key_is(w, "COLOR_CHROME") || key_is(w, "CHROME")) {
+            s->color_chrome = sc_level(&t);
+        }
+        else if (key_is(w, "FX_BLUE"))  s->fx_blue = sc_level(&t);
         else if (key_is(w, "HUE_SAT"))  parse_hue_vec(&t, s->hue_sat);
         else if (key_is(w, "HUE_ROT"))  parse_hue_vec(&t, s->hue_rot);
         else if (key_is(w, "HUE_LUM"))  parse_hue_vec(&t, s->hue_lum);

@@ -15,7 +15,26 @@
 
 typedef struct
 {
-    int ba;          /* -9..+9  offset the user is setting       */
+    /*
+     * FUJI'S AXES, not Canon's.
+     *
+     * A Fuji recipe is written "White Balance: Daylight, +2 Red & -5 Blue",
+     * so the numbers a user has in front of them are R and B -- not the
+     * Blue/Amber and Green/Magenta that PROP_WBS_BA/GM speak. The screen
+     * edits R and B so a published recipe can be typed in as written, and
+     * the two are mapped onto the camera's axes on the way out:
+     *
+     *   Fuji Blue (+ = cooler)  ->  Canon B/A (- = blue)
+     *   Fuji Red  (+ = warmer)  ->  Canon G/M (- = magenta)
+     *
+     * The scale is 1:1 because both are -9..+9. That mapping is a
+     * reasonable structural match, NOT a measured equivalence: no Fuji body
+     * was available to compare against, so treat a transcribed recipe as
+     * approximate.
+     */
+    int r;           /* -9..+9  Fuji Red axis, the user's number  */
+    int b;           /* -9..+9  Fuji Blue axis                      */
+    int ba;          /* the same pair on Canon's axes, for display */
     int gm;
     int stock_ba;    /* the base stock's own shift, which this    */
     int stock_gm;    /* one is added to                           */

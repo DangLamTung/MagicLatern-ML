@@ -4934,8 +4934,15 @@ static int fs_creator_run(void) {
 static void fs_wb_render(void)
 {
   fs_stock_wb_shift(&fs_wb.stock_ba, &fs_wb.stock_gm);
+  /*
+   * The config holds Canon's axes (it is written straight into PROP_WBS_*),
+   * and the screen shows Fuji's. Converting in one place keeps the two from
+   * drifting: Canon B/A = -Fuji Blue, Canon G/M = -Fuji Red.
+   */
   fs_wb.ba = fs_clamp_i(film_sim_wbs_ba, -9, 9);
   fs_wb.gm = fs_clamp_i(film_sim_wbs_gm, -9, 9);
+  fs_wb.r  = -fs_wb.gm;
+  fs_wb.b  = -fs_wb.ba;
   fs_wb.moved  = (fs_wb.ba || fs_wb.gm);
   fs_wb.applied = fs_wb_applied;
   fsg_draw_wb(&fs_wb);
@@ -6235,13 +6242,15 @@ static int fs_key_handle(int k) {
 
   if (fs_wb_active) {
     switch (act) {
-    case ACT_LEFT:  film_sim_wbs_ba = fs_clamp_i(film_sim_wbs_ba - 1, -9, 9);
+    /* LEFT/RIGHT are Fuji's Red axis, UP/DOWN its Blue axis, so the grid
+     * moves the way the numbers in a published recipe read */
+    case ACT_LEFT:  film_sim_wbs_gm = fs_clamp_i(film_sim_wbs_gm + 1, -9, 9);
                     fs_wb_applied = 0; fs_wb_dirty = 1; return 0;
-    case ACT_RIGHT: film_sim_wbs_ba = fs_clamp_i(film_sim_wbs_ba + 1, -9, 9);
+    case ACT_RIGHT: film_sim_wbs_gm = fs_clamp_i(film_sim_wbs_gm - 1, -9, 9);
                     fs_wb_applied = 0; fs_wb_dirty = 1; return 0;
-    case ACT_UP:    film_sim_wbs_gm = fs_clamp_i(film_sim_wbs_gm + 1, -9, 9);
+    case ACT_UP:    film_sim_wbs_ba = fs_clamp_i(film_sim_wbs_ba - 1, -9, 9);
                     fs_wb_applied = 0; fs_wb_dirty = 1; return 0;
-    case ACT_DOWN:  film_sim_wbs_gm = fs_clamp_i(film_sim_wbs_gm - 1, -9, 9);
+    case ACT_DOWN:  film_sim_wbs_ba = fs_clamp_i(film_sim_wbs_ba + 1, -9, 9);
                     fs_wb_applied = 0; fs_wb_dirty = 1; return 0;
     case ACT_SET:
       fs_wb_apply = 1;

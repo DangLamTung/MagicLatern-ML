@@ -43,6 +43,7 @@
 #include "gui/fsg_creator.h"
 #include "gui/fsg_wb.h"
 #include "gui/fs_spring.h"
+#include "gui/fs_fuji.h"
 #include "se/se_cam.h"
 
 #define FS_PATH_LEN 128
@@ -1391,6 +1392,18 @@ static volatile int fs_wb_apply = 0;
 static volatile int fs_wb_exit = 0;
 static volatile int fs_wb_applied = 0;
 static fs_wb_t       fs_wb;
+
+/* The Fuji recipe page's state: one bundle, saved into a .fs. */
+static fs_fuji_t     fs_fuji;
+static volatile int  fs_fuji_save;
+
+/* A recipe name has to be typeable on a camera with no keyboard, so it is
+ * chosen from a short list instead of entered. Four slots, like a Fuji body's
+ * C1..C4, and the .fs filename is the name. */
+static const char *fs_fuji_names[] = { "FUJI1", "FUJI2", "FUJI3", "FUJI4" };
+static int   fs_fuji_slot;
+static int   fs_fuji_inited;
+
 static fs_creator_t   fs_creator;
 
 static unsigned int fs_display_filter(unsigned int ctx) {
@@ -5001,6 +5014,76 @@ static int fs_wb_run(void) {
   return FS_VIEW_NONE;
 }
 
+/* ------------------------------------------------------- Fuji recipe
+ *
+ * Not a screen: a Fuji body has no recipe screen either. Their recipe is a
+ * bundle of IMAGE QUALITY SETTING menu items saved in a C1..C7 slot, and the
+ * .fs file is this module's slot. So this is a menu page whose Save writes
+ * ML/FILM/<NAME>.fs, and the shelf picks it up like any other stock.
+ */
+
+static void fs_fuji_ensure_init(void)
+{
+  if (!fs_fuji_inited) {
+    fs_fuji_inited = 1;
+    fs_fuji_defaults(&fs_fuji);
+    snprintf(fs_fuji.name, sizeof fs_fuji.name, "%s", fs_fuji_names[fs_fuji_slot]);
+  }
+}
+
+static void fs_fuji_save_task(void *unused) {
+  char buf[2048];
+  char path[64];
+  int n;
+
+  fs_log("fuji: recipe save task started");
+  fs_log_flush();
+  n = fs_fuji_write(&fs_fuji, buf, sizeof buf);
+  if (n < 0) {
+    NotifyBox(1600, "Fuji: recipe did not fit");
+    fs_fuji_save = 0;
+    return;
+  }
+  if (!fs_fuji.name[0])   /* the Name row was never displayed */
+    snprintf(fs_fuji.name, sizeof fs_fuji.name, "%s", fs_fuji_names[fs_fuji_slot]);
+  snprintf(path, sizeof path, "ML/FILM/%.8s.fs", fs_fuji.name);
+  FIO_CreateDirectory("ML/FILM");
+  {
+    FILE *f = FIO_CreateFile(path);
+    int wrote = f ? FIO_WriteFile(f, buf, (size_t)n) : -1;
+    if (f) FIO_CloseFile(f);
+    if (wrote != n) {
+      NotifyBox(1600, "Fuji: write failed");
+      fs_log("fuji: writing '%s' gave %d of %d bytes", path, wrote, n);
+      fs_log_flush();
+      fs_fuji_save = 0;
+      return;
+    }
+  }
+  fs_log("fuji: wrote %s (%d bytes)", path, n);
+  fs_log_flush();
+  fs_load_films_xml();
+  fs_group_by_artwork();
+  NotifyBox(1500, "Saved %s", path);
+  fs_fuji_save = 0;
+}
+
+static MENU_SELECT_FUNC(fs_fuji_save_trigger) {
+  /* FIO on a task, never in a menu handler. */
+  fs_fuji_ensure_init();
+  if (!fs_fuji_save) {
+    fs_fuji_save = 1;
+    task_create("fs_fuji_save", 0.5, 0x2000, fs_fuji_save_task, 0);
+  }
+}
+
+/* The three fields a Fuji recipe has that this body cannot honour. Pressing
+ * one says why instead of moving a knob that does nothing. */
+static MENU_SELECT_FUNC(fs_fuji_unavailable) {
+  const char *what = (const char *)priv;
+  NotifyBox(2500, "%s", what);
+}
+
 static void fs_ui_task(void *arg) {
   int view = (int)(intptr_t)arg;
   fs_log("ui: task started view=%d", view);
@@ -6743,6 +6826,122 @@ static struct menu_entry fs_menu_debug[] = {
 };
 
 /* The develop side: choose a frame, a film and run the engine. */
+static const char *fs_level_names[] = { "Off", "Weak", "Strong" };
+
+static MENU_UPDATE_FUNC(fs_fuji_init_update) { fs_fuji_ensure_init(); }
+
+static MENU_UPDATE_FUNC(fs_fuji_name_update) {
+  fs_fuji_ensure_init();
+  if (fs_fuji.name[0] == 0) {
+    snprintf(fs_fuji.name, sizeof fs_fuji.name, "%s", fs_fuji_names[fs_fuji_slot]);
+  }
+  MENU_SET_VALUE("%s", fs_fuji.name);
+}
+
+static MENU_SELECT_FUNC(fs_fuji_name_select) {
+  fs_fuji_slot = (fs_fuji_slot + 1) % 4;
+  snprintf(fs_fuji.name, sizeof fs_fuji.name, "%s", fs_fuji_names[fs_fuji_slot]);
+}
+
+static struct menu_entry fs_menu_fuji[] = {
+    {
+        .name = "Name",
+        .update = fs_fuji_name_update,
+        .select = fs_fuji_name_select,
+        .help = "Which C-slot this recipe is saved as: ML/FILM/<NAME>.fs.",
+    },
+    {
+        .name = "TONE CURVE Hi",
+        .update = fs_fuji_init_update,
+        .priv = &fs_fuji.highlight,
+        .min = -2, .max = 4,
+        .help = "Highlight -2..+4. Positive compresses the top end, as Fuji's "
+                "does. Written into the recipe's CURVE.",
+    },
+    {
+        .name = "TONE CURVE Sh",
+        .priv = &fs_fuji.shadow,
+        .min = -2, .max = 4,
+        .help = "Shadow -2..+4. Positive deepens the bottom end.",
+    },
+    {
+        .name = "Color",
+        .priv = &fs_fuji.color,
+        .min = -4, .max = 4,
+        .help = "Colour -4..+4, written as SAT 52..148.",
+    },
+    {
+        .name = "Color Chrome",
+        .priv = &fs_fuji.chrome,
+        .min = 0, .max = 2,
+        .choices = fs_level_names,
+        .help = "Fuji's COLOR CHROME EFFECT. Deepens colours that are already "
+                "saturated and leaves dull ones alone.",
+    },
+    {
+        .name = "Chrome FX Blue",
+        .priv = &fs_fuji.fx_blue,
+        .min = 0, .max = 2,
+        .choices = fs_level_names,
+        .help = "Fuji's COLOR CHROME FX BLUE: the same, restricted to blues.",
+    },
+    {
+        .name = "Grain",
+        .priv = &fs_fuji.grain,
+        .min = 0, .max = 2,
+        .choices = fs_level_names,
+        .help = "GRAIN EFFECT, off/weak/strong.",
+    },
+    {
+        .name = "Grain Size",
+        .priv = &fs_fuji.grain_size,
+        .min = 0, .max = 1,
+        .help = "0 = small, 1 = large.",
+    },
+    {
+        .name = "WB Shift R/B",
+        .select = fs_wb_trigger,
+        .icon_type = IT_ACTION,
+        .help = "Fuji's Red and Blue WB shift. Written to the camera, not to "
+                "the recipe: it is a white balance, not part of a look.",
+    },
+    {
+        .name = "Dynamic Range",
+        .select = fs_fuji_unavailable,
+        .priv = "Cannot be reproduced: DR200/400 raise ISO and pull "
+                "highlights before digitising. On an 8-bit JPEG the headroom "
+                "is already gone.",
+        .icon_type = IT_ACTION,
+        .help = "Present in a Fuji recipe, not reproducible on this body.",
+    },
+    {
+        .name = "Clarity",
+        .select = fs_fuji_unavailable,
+        .priv = "Implemented and measured, then reverted: it needs a ring of "
+                "GRADED luma, and the current ring sums input luma, so the "
+                "tone curve's own lift was read as detail. See "
+                "docs/fuji-recipe-fields.md.",
+        .icon_type = IT_ACTION,
+        .help = "Present in a Fuji recipe, not available here yet.",
+    },
+    {
+        .name = "High ISO NR",
+        .select = fs_fuji_unavailable,
+        .priv = "Canon's noise reduction lives in the picture style and is "
+                "not driven by this module yet.",
+        .icon_type = IT_ACTION,
+        .help = "Present in a Fuji recipe, not wired yet.",
+    },
+    {
+        .name = "Save Recipe",
+        .select = fs_fuji_save_trigger,
+        .icon_type = IT_ACTION,
+        .help = "Write ML/FILM/<NAME>.fs and reload the shelf. The recipe then "
+                "shoots and develops like any other stock.",
+    },
+    MENU_EOL,
+};
+
 static struct menu_entry film_sim_menu[] = {
     {
         .name = "Film Shelf",
@@ -6843,6 +7042,14 @@ static struct menu_entry film_sim_menu[] = {
         .icon_type = IT_ACTION,
         .help = "A grid of Blue/Amber against Green/Magenta, written into the "
                 "camera's own white balance the way a Fuji recipe does.",
+    },
+    {
+        .name = "Fuji Recipe",
+        .select = menu_open_submenu,
+        .icon_type = IT_ACTION,
+        .help = "A bundle of Fuji's IMAGE QUALITY SETTING items, saved as a "
+                ".fs -- the C1..C7 slot equivalent.",
+        .children = fs_menu_fuji,
     },
     {
         .name = "Color Creator",

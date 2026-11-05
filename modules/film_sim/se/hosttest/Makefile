@@ -62,6 +62,9 @@ bench_grade: bench_grade.c $(SE_DIR)/se_libgcc.c $(SE_DIR)/../fs_yuvlook.c $(ENG
 
 # the drawing half needs a backend for fsg_fill/fsg_text; the desktop one
 # goes here so the writer test links without a panel
+fujiwrite: fujiwrite.c ../../gui/fs_fuji.c $(SE_DIR)/se_libgcc.c $(ENG_SRC) stubs.c
+	$(CC) -I../../.. $(CFLAGS) $(CPPFLAGS) -o $@ $^ $(LDLIBS)
+
 creatorwrite: creatorwrite.c ../../gui/fsg_creator.c ../../../../../tools/gui_preview/fsg_host.c \
               $(SE_DIR)/se_libgcc.c $(ENG_SRC) stubs.c
 	$(CC) -I../../.. -I../../../../../tools/gui_preview $(CFLAGS) $(CPPFLAGS) -o $@ $^ $(LDLIBS)
@@ -102,7 +105,7 @@ match: lookmatch
 	./lookmatch "$(CR2)" "$(STOCK)"
 
 clean:
-	rm -f $(BIN) lookmatch rawdev grade_jpeg lvgrade tabledump tableerr bench_grade lv3d creatorwrite springtest fs2cube lutchk
+	rm -f $(BIN) lookmatch rawdev grade_jpeg lvgrade tabledump tableerr bench_grade lv3d creatorwrite fujiwrite springtest fs2cube lutchk
 
 .PHONY: all check match clean
 

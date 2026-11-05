@@ -1384,6 +1384,10 @@ static volatile int fs_creator_dirty;
 static volatile int fs_creator_save;
 static volatile int fs_creator_exit;
 static volatile int fs_creator_saving;
+/* Four slots, like the Fuji page's FUJI1..4: one fixed filename meant the
+ * second look silently overwrote the first. Slot 0 keeps the old name so
+ * existing logs and docs still make sense. */
+static int fs_creator_slot;
 
 /* The Fuji WB shift screen. */
 static volatile int fs_wb_active = 0;
@@ -4806,8 +4810,11 @@ static void fs_creator_render(void)
 static void fs_creator_save_task(void *unused) {
   char buf[2048];
   char path[64];
-  const char *name = "WHEEL";
+  char name[12];
   int n;
+
+  if (fs_creator_slot <= 0) snprintf(name, sizeof name, "WHEEL");
+  else                      snprintf(name, sizeof name, "WHEEL%d", fs_creator_slot + 1);
 
   fs_log("creator: save task started");
   fs_log_flush();
@@ -4820,7 +4827,7 @@ static void fs_creator_save_task(void *unused) {
     fs_creator_saving = 0;
     return;
   }
-  snprintf(path, sizeof path, "ML/FILM/%s.fs", name);
+  snprintf(path, sizeof path, "ML/FILM/%.8s.fs", name);
   FIO_CreateDirectory("ML/FILM");
   {
     FILE *f = FIO_CreateFile(path);
@@ -6292,9 +6299,13 @@ static int fs_key_handle(int k) {
     switch (act) {
     /* LEFT/RIGHT are Fuji's Red axis, UP/DOWN its Blue axis, so the grid
      * moves the way the numbers in a published recipe read */
-    case ACT_LEFT:  film_sim_wbs_gm = fs_clamp_i(film_sim_wbs_gm + 1, -9, 9);
+    case ACT_LEFT:
+    case ACT_UP_WHEEL:             /* the other rotating control */
+                    film_sim_wbs_gm = fs_clamp_i(film_sim_wbs_gm + 1, -9, 9);
                     fs_wb_applied = 0; fs_wb_dirty = 1; return 0;
-    case ACT_RIGHT: film_sim_wbs_gm = fs_clamp_i(film_sim_wbs_gm - 1, -9, 9);
+    case ACT_RIGHT:
+    case ACT_DOWN_WHEEL:
+                    film_sim_wbs_gm = fs_clamp_i(film_sim_wbs_gm - 1, -9, 9);
                     fs_wb_applied = 0; fs_wb_dirty = 1; return 0;
     case ACT_UP:    film_sim_wbs_ba = fs_clamp_i(film_sim_wbs_ba - 1, -9, 9);
                     fs_wb_applied = 0; fs_wb_dirty = 1; return 0;
@@ -6320,15 +6331,28 @@ static int fs_key_handle(int k) {
 
   if (fs_creator_active) {
     switch (act) {
-    case ACT_LEFT:  fs_creator_step(&fs_creator, 1); fs_creator_dirty = 1; return 0;
-    case ACT_RIGHT: fs_creator_step(&fs_creator, 2); fs_creator_dirty = 1; return 0;
-    case ACT_UP:    fs_creator_step(&fs_creator, 3); fs_creator_dirty = 1; return 0;
-    case ACT_DOWN:  fs_creator_step(&fs_creator, 4); fs_creator_dirty = 1; return 0;
-    case ACT_Q:     fs_creator_step(&fs_creator, 6); fs_creator_dirty = 1; return 0;
+    /*
+     * Both rotating controls, not one. The body sends WHEEL_LEFT/RIGHT as
+     * 0x02/0x03 and WHEEL_UP/DOWN as 0x00/0x01; fs_act_of() decodes the
+     * second pair as ACT_UP_WHEEL/ACT_DOWN_WHEEL and NOTHING in the module
+     * handled those, so one of the two dials was dead on every screen that
+     * offered rotation. ML's own menus treat up/left and down/right as the
+     * same direction, which is why the pairing below is up=left.
+     */
+    case ACT_LEFT:
+    case ACT_UP_WHEEL:             fs_creator_step(&fs_creator, 1); fs_creator_dirty = 1; return 0;
+    case ACT_RIGHT:
+    case ACT_DOWN_WHEEL:           fs_creator_step(&fs_creator, 2); fs_creator_dirty = 1; return 0;
+    case ACT_UP:                   fs_creator_step(&fs_creator, 3); fs_creator_dirty = 1; return 0;
+    case ACT_DOWN:                 fs_creator_step(&fs_creator, 4); fs_creator_dirty = 1; return 0;
+    case ACT_Q:                    fs_creator_step(&fs_creator, 6); fs_creator_dirty = 1; return 0;
     case ACT_SET:
-      /* On the tone screen SET is "save"; on the wheel it walks the three
-       * fields. Both are a step, so the same action, told apart by screen. */
-      if (fs_creator.screen == 1) { fs_creator_save = 1; return 0; }
+      /*
+       * SET means one thing on this screen, whichever page is showing: move
+       * to the next field. It used to write the card on the tone page, so a
+       * key that is harmless on the wheel started an FIO write one press
+       * away. Saving is PLAY, on both pages.
+       */
       fs_creator_step(&fs_creator, 5);
       fs_creator_dirty = 1;
       return 0;
@@ -6989,7 +7013,17 @@ static struct menu_entry fs_menu_live[] = {
     MENU_EOL,
 };
 
+static const char *fs_slot_names[] = { "WHEEL (1)", "WHEEL2", "WHEEL3", "WHEEL4" };
+
 static struct menu_entry fs_menu_recipes[] = {
+    {
+        .name = "Creator Slot",
+        .priv = &fs_creator_slot,
+        .min = 0, .max = 3,
+        .choices = fs_slot_names,
+        .help = "Which file the Color Creator saves: ML/FILM/WHEEL.fs, then "
+                "WHEEL2..WHEEL4. One fixed name overwrote the last look.",
+    },
     {
         .name = "Fuji Recipe",
         .select = menu_open_submenu,

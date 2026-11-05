@@ -239,8 +239,7 @@ void fsg_draw_creator(const fs_creator_t *c)
             fsg_text(x, y + 34, FSG_T_SMALL, FSG_AMBER, FSG_BG, "UNSAVED");
     }
 
-    footer("LEFT/RIGHT wedge    UP/DOWN value    SET field"
-           "    Q tone    MENU back");
+    footer("DIAL wedge  UP/DOWN value  SET field  PLAY save  Q tone  MENU back");
 }
 
 /* ---- the tone screen -------------------------------------------------- */
@@ -306,7 +305,7 @@ void fsg_draw_tone(const fs_creator_t *c)
     if (c->dirty)
         fsg_text(gx + gw + 24, gy + 150, FSG_T_SMALL, FSG_AMBER, FSG_BG, "UNSAVED");
 
-    footer("UP/DOWN value    Q wheel    SET save    MENU back");
+    footer("UP/DOWN value    SET field    PLAY save    Q wheel    MENU back");
 }
 
 /* ---- keys ------------------------------------------------------------- */

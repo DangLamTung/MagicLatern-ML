@@ -1388,6 +1388,8 @@ static volatile int fs_creator_saving;
  * second look silently overwrote the first. Slot 0 keeps the old name so
  * existing logs and docs still make sense. */
 static int fs_creator_slot;
+static char fs_creator_saved_name[12];
+static const char *fs_slot_names[] = { "WHEEL (1)", "WHEEL2", "WHEEL3", "WHEEL4" };
 
 /* The ring's motion: same spring the shelf uses, in units of one wedge. */
 static fs_spring_t      fs_creator_spring;
@@ -4890,7 +4892,13 @@ static void fs_creator_save_task(void *unused) {
    * This walks the card, which is why it is here and not in the key handler. */
   fs_load_films_xml();
   fs_group_by_artwork();
-  NotifyBox(1500, "Saved ML/FILM/%s.fs", name);
+  /* No NotifyBox: the creator repaints the whole frame from its own loop and
+   * would erase it. The screen draws this itself, and keeps it until the next
+   * value change. */
+  snprintf(fs_creator_saved_name, sizeof fs_creator_saved_name, "%.8s", name);
+  fs_creator.saved_name = fs_creator_saved_name;
+  fs_creator.saved = 1;
+  beep_times(1);
   fs_creator.dirty = 0;
   fs_creator_saving = 0;
   fs_creator_dirty = 1;   /* repaint with UNSAVED cleared */
@@ -4905,6 +4913,7 @@ static int fs_creator_run(void) {
   beep_times(1);
 
   fs_creator_defaults(&fs_creator, "BASE: CLASSIC CHROME");
+  fs_creator.slot_name = fs_slot_names[fs_clamp_i(fs_creator_slot, 0, 3)];
   /* start settled: a spring beginning at 0 would spin the whole ring into
    * place every time the screen opens */
   fs_creator_spring.x = 0;
@@ -6278,8 +6287,13 @@ static int fs_act_of(int k) {
   case 0x01:
     return ACT_DOWN_WHEEL; /* BGMT_WHEEL_DOWN */
   case 0x04:
+    /* PRESS_SET only. UNPRESS_SET (0x05) used to map here too, so one press
+     * stepped the creator's field twice and skipped Luminance entirely:
+     * FILMSIM.LOG has "p=4 act=7" and "p=5 act=7" as a pair, ~150 ms apart,
+     * for every single press. An unpress carries no new information. */
+    return ACT_SET;
   case 0x05:
-    return ACT_SET; /* PRESS/UNPRESS_SET */
+    return ACT_NONE; /* BGMT_UNPRESS_SET */
   case 0x1d:
     return ACT_Q;
   case 0x0b:
@@ -7064,17 +7078,6 @@ static struct menu_entry fs_menu_look[] = {
                 "3:2 frame with black bars, so the body shows the whole frame "
                 "instead of something that is not what you composed.",
     },
-    {
-        .name = "Framing",
-        .priv = &film_sim_aspect,
-        .max = FS_ASPECT_COUNT - 1,
-        .choices = fs_aspect_names,
-        .update = fs_aspect_update,
-        .help = "Black bars on LiveView where the frame will be cropped. Canon "
-                "writes the JPEG at the full 3:2 sensor size and a module cannot "
-                "change that, so the crop is done afterwards; the bars are there "
-                "so nothing important is composed outside it.",
-    },
     MENU_EOL,
 };
 
@@ -7114,9 +7117,19 @@ static struct menu_entry fs_menu_live[] = {
     MENU_EOL,
 };
 
-static const char *fs_slot_names[] = { "WHEEL (1)", "WHEEL2", "WHEEL3", "WHEEL4" };
-
-static struct menu_entry fs_menu_recipes[] = {
+/*
+ * A top-level menu of its own, not a submenu of the film simulation: these are
+ * the tools that make a look of your own, and looking for the colour creator
+ * under a menu called "Film Dev" is what the user asked to stop doing.
+ */
+static struct menu_entry fs_menu_usercolor[] = {
+    {
+        .name = "Color Creator",
+        .select = fs_creator_trigger,
+        .icon_type = IT_ACTION,
+        .help = "Twelve wedges, 30 degrees apart, plus highlight/shadow. PLAY "
+                "writes the look to ML/FILM/WHEEL*.fs and the shelf reloads.",
+    },
     {
         .name = "Creator Slot",
         .priv = &fs_creator_slot,
@@ -7126,26 +7139,19 @@ static struct menu_entry fs_menu_recipes[] = {
                 "WHEEL2..WHEEL4. One fixed name overwrote the last look.",
     },
     {
+        .name = "Fuji WB Shift",
+        .select = fs_wb_trigger,
+        .icon_type = IT_ACTION,
+        .help = "A grid of Blue/Amber against Green/Magenta, written into the "
+                "camera's own white balance the way a Fuji recipe does.",
+    },
+    {
         .name = "Fuji Recipe",
         .select = menu_open_submenu,
         .icon_type = IT_ACTION,
         .help = "A bundle of Fuji's IMAGE QUALITY SETTING items, saved as a "
                 ".fs -- the C1..C7 slot equivalent.",
         .children = fs_menu_fuji,
-    },
-    {
-        .name = "Color Creator",
-        .select = fs_creator_trigger,
-        .icon_type = IT_ACTION,
-        .help = "Twelve wedges, 30 degrees apart, plus highlight/shadow. "
-                "Saves ML/FILM/WHEEL.fs and reloads the shelf.",
-    },
-    {
-        .name = "Fuji WB Shift",
-        .select = fs_wb_trigger,
-        .icon_type = IT_ACTION,
-        .help = "A grid of Blue/Amber against Green/Magenta, written into the "
-                "camera's own white balance the way a Fuji recipe does.",
     },
     MENU_EOL,
 };
@@ -7194,18 +7200,24 @@ static struct menu_entry film_sim_menu[] = {
         .help = "Tick this photo for the develop set. Q: clear the set.",
     },
     {
+        .name = "Framing",
+        .priv = &film_sim_aspect,
+        .max = FS_ASPECT_COUNT - 1,
+        .choices = fs_aspect_names,
+        .update = fs_aspect_update,
+        .help = "One setting for both halves of what-you-see-is-what-you-get: "
+                "the bars on LiveView and the window a developed file is cut "
+                "to use the same mode. Canon's own JPEG is always the full 3:2 "
+                "sensor, which a module cannot change, so a file the camera "
+                "shoots is 3:2 with the bars; a file Develop writes is cut to "
+                "the shape the bars showed.",
+    },
+    {
         .name = "Look",
         .select = menu_open_submenu,
         .icon_type = IT_ACTION,
-        .help = "Strength, saturation, grain, padding and framing.",
+        .help = "Strength, saturation, grain and padding.",
         .children = fs_menu_look,
-    },
-    {
-        .name = "Recipes",
-        .select = menu_open_submenu,
-        .icon_type = IT_ACTION,
-        .help = "Fuji recipe page, the 12-colour creator and the WB grid.",
-        .children = fs_menu_recipes,
     },
     {
         .name = "LiveView",
@@ -7596,6 +7608,7 @@ static unsigned int film_sim_init() {
    * entries in ML's menu bar for one module. Everything is reachable from the
    * one list below, one level deeper. */
   menu_add("Film Dev", film_sim_menu, COUNT(film_sim_menu) - 1);
+  menu_add("User Color", fs_menu_usercolor, COUNT(fs_menu_usercolor) - 1);
   if (fs_test_flag()) {
     task_create("fs_test", 0x1e, 0x4000, fs_test_task, 0);
   }

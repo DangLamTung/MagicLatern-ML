@@ -369,8 +369,13 @@ static int jpeg_out(void *ctx, const unsigned char *data, size_t len)
 /* Decode and grading stream at the same time (rows are emitted as the decoder
  * produces them), so the two mapped ranges can interleave. Never let the bar
  * move backwards. */
-/* Aspect framing for the written file: 0 full 3:2, 1 16:9, 2 XPan 65:24.
- * Set once, read when the encoder is sized and when rows are emitted. */
+/* Aspect framing for the written file. The numbering is the MENU's, the same
+ * one fs_core_aspect_ratio() uses for the LiveView bars, because the whole
+ * point is that the two agree:
+ *   0 3:2 full (native)  1 1:1   2 4:5   3 9:16   4 16:9   5 65:24 XPan
+ * (This comment said "1 16:9, 2 XPan", which never matched the switch below
+ * in aspect_target().) Set once, read when the encoder is sized and when rows
+ * are emitted. */
 static int se_aspect_mode = 0;
 void se_cam_set_aspect(int mode) { se_aspect_mode = mode; }
 

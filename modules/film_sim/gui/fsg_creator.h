@@ -34,6 +34,16 @@ typedef struct
     int shadow;
     int highlight;
 
+    /*
+     * Save feedback lives on this screen. It cannot be a NotifyBox: the
+     * creator repaints the whole frame from its own loop, so a toast drawn by
+     * ML is erased before anyone sees it -- which is why "nothing shows the
+     * profile is saved". `saved` is cleared by the next value change.
+     */
+    int         saved;
+    const char *slot_name;   /* the file PLAY writes, e.g. "WHEEL2"     */
+    const char *saved_name;  /* what was just written, once it exists   */
+
     const char *stock;   /* base stock name, shown in the header          */
 } fs_creator_t;
 

@@ -328,8 +328,8 @@ static void sector_band(int cx, int cy, int r0, int r1, int a1, int a2, int colo
  * Values map to radius with the neutral mid-point at R_MID: 100 for saturation
  * and luminance, 0 for rotation, so "untouched" is a clean regular dodecagon.
  */
-#define CREATOR_R_MID   88
-#define CREATOR_R_SPAN  32
+#define CREATOR_R_MID   90
+#define CREATOR_R_SPAN  32  /* +-32 px over the full value range */
 #define CREATOR_R_MAX   126    /* the coloured perimeter */
 
 static int wedge_radius(const fs_creator_t *c, int i, int tab)
@@ -435,6 +435,19 @@ void fsg_draw_creator_wheel(const fs_creator_t *c, int offset_q16)
     fsg_text(cx - 30, cy + 2, FSG_T_LARGE, FSG_AMBER, FSG_BG_DEEP, "%s", num);
   }
 
+  /* a needle from the hub to the selected vertex. Without it a value change
+   * moves one dot a couple of pixels, which is what "the point in the colour
+   * wheel does not change" was: the radar was alive, the feedback was too
+   * small to see. */
+  {
+    int nx, ny, ax, ay;
+    int a = wedge_angle(c->sel, offset_q16);
+    dodec_point(cx, cy, CREATOR_R_IN + 2, a, &ax, &ay);
+    dodec_point(cx, cy, wedge_radius(c, c->sel, c->field), a, &nx, &ny);
+    line_fill(ax, ay, nx, ny, FSG_AMBER);
+    line_fill(ax, ay + 1, nx, ny + 1, FSG_AMBER);
+  }
+
   /* the pointer the shape turns past: inside the perimeter, because the
    * selected wedge is always the one at twelve o'clock and its number sits
    * outside the perimeter -- a pointer out there hides the number being edited */
@@ -525,8 +538,23 @@ void fsg_draw_creator(const fs_creator_t *c)
             fsg_text(x + w - 60, y + 6, FSG_T_SMALL,
                      moved ? FSG_WHITE : FSG_GREEN, FSG_BG, "%s", value);
         }
-        if (c->dirty)
+        if (c->saved) {
+            char line[48];
+            snprintf(line, sizeof line, "SAVED ML/FILM/%s.fs",
+                     c->saved_name ? c->saved_name : "WHEEL");
+            fsg_fill(x, y + 30, w, 20, FSG_GREEN_DARK);
+            fsg_text(x + 8, y + 36, FSG_T_SMALL, FSG_GREEN, FSG_GREEN_DARK,
+                     "%s", line);
+        } else if (c->dirty) {
             fsg_text(x, y + 34, FSG_T_SMALL, FSG_AMBER, FSG_BG, "UNSAVED");
+        }
+        /* what PLAY will write, always, so the slot is never a surprise */
+        if (!c->saved) {
+            char line[48];
+            snprintf(line, sizeof line, "PLAY writes %s.fs",
+                     c->slot_name ? c->slot_name : "WHEEL");
+            fsg_text(x, y + 58, FSG_T_SMALL, FSG_GREY, FSG_BG, "%s", line);
+        }
     }
 
     footer("DIAL wedge  UP/DOWN value  SET series  PLAY save  Q tone  MENU back");
@@ -615,6 +643,7 @@ void fs_creator_defaults(fs_creator_t *c, const char *stock)
         c->lum[i] = 100;
     }
     c->screen = 0;
+    c->slot_name = "WHEEL";
     c->stock = stock;
 }
 
@@ -640,15 +669,15 @@ void fs_creator_step(fs_creator_t *c, int act)
         if (c->screen == 0) {
             int step = (act == A_UP) ? 1 : -1;
             if (c->field == 0) {
-                c->sat[c->sel] += step * 4;
+                c->sat[c->sel] += step * 10;
                 if (c->sat[c->sel] < 0) c->sat[c->sel] = 0;
                 if (c->sat[c->sel] > 200) c->sat[c->sel] = 200;
             } else if (c->field == 1) {
-                c->rot[c->sel] += step * 4;
+                c->rot[c->sel] += step * 15;
                 if (c->rot[c->sel] < -180) c->rot[c->sel] = -180;
                 if (c->rot[c->sel] > 180) c->rot[c->sel] = 180;
             } else {
-                c->lum[c->sel] += step * 4;
+                c->lum[c->sel] += step * 10;
                 if (c->lum[c->sel] < 0) c->lum[c->sel] = 0;
                 if (c->lum[c->sel] > 200) c->lum[c->sel] = 200;
             }
@@ -664,6 +693,7 @@ void fs_creator_step(fs_creator_t *c, int act)
             }
         }
         c->dirty = 1;
+        c->saved = 0;
         break;
     case A_SET:
         if (c->screen == 0) {

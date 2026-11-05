@@ -19,6 +19,11 @@ static const int cc24[24][3] = {
   {243,243,242},{200,200,200},{160,160,160},{122,122,121},{85,85,85},{52,52,52}
 };
 
+static double linear_to_srgb(double v)
+{
+  return (v <= 0.0031308) ? 12.92 * v : 1.055 * pow(v, 1.0 / 2.4) - 0.055;
+}
+
 static double srgb_to_linear(double v)
 {
   return (v > 0.04045) ? pow((v + 0.055) / 1.055, 2.4) : v / 12.92;
@@ -157,8 +162,17 @@ int main(int argc, char **argv)
     }
     se_lut3_apply_row(&cube, p, 1);
     rgb2lab(g_out[i * 3 + 0], g_out[i * 3 + 1], g_out[i * 3 + 2], &l1[0], &l1[1], &l1[2]);
-    rgb2lab(p[0] / 257.0, p[1] / 257.0, p[2] / 257.0, &l2[0], &l2[1], &l2[2]);
-    (void)0;
+    /* In linear mode the cube hands back LINEAR light; rgb2lab expects
+     * display-encoded values and would linearise a second time. That double
+     * conversion is what made the abpy numbers read 16.85 instead of 10.16. */
+    if (linear_in) {
+      double r = linear_to_srgb(p[0] / 65535.0) * 255.0;
+      double g = linear_to_srgb(p[1] / 65535.0) * 255.0;
+      double b = linear_to_srgb(p[2] / 65535.0) * 255.0;
+      rgb2lab(r, g, b, &l2[0], &l2[1], &l2[2]);
+    } else {
+      rgb2lab(p[0] / 257.0, p[1] / 257.0, p[2] / 257.0, &l2[0], &l2[1], &l2[2]);
+    }
     d = de00(l1, l2);
     sum += d;
     if (d > worst) { worst = d; worst_i = i; }

@@ -40,6 +40,28 @@ typedef struct
 void fs_creator_defaults(fs_creator_t *c, const char *stock);
 void fs_creator_step(fs_creator_t *c, int key);   /* returns via .dirty */
 void fsg_draw_creator(const fs_creator_t *c);
+
+/*
+ * The rotating ring.
+ *
+ * `offset_q16` is the wheel's position in 2^16 units of ONE wedge, so the
+ * selected bead sits under a fixed pointer at the top and the rest of the
+ * ring turns past it -- which is what a physical dial does, and what the
+ * screen did not: it used to jump a whole 30 degrees per press.
+ *
+ * Only the beads move, so only the beads are redrawn: the previous centres
+ * in `sp` are erased with the disc colour and the new ones drawn. The disc
+ * behind them is flat, so that erase is exact rather than approximate, and a
+ * frame costs ~12 small fills instead of the 301-fill disc.
+ */
+typedef struct { int x[FS_CREATOR_WEDGES], y[FS_CREATOR_WEDGES]; int valid; } fs_creator_spin_t;
+
+/* The rows the ring occupies, so a spin frame copies back only those. */
+#define FSG_CREATOR_RING_Y0 92
+#define FSG_CREATOR_RING_Y1 408
+
+void fsg_draw_creator_beads(const fs_creator_t *c, int offset_q16,
+                            fs_creator_spin_t *sp);
 void fsg_draw_tone(const fs_creator_t *c);
 
 /*

@@ -1389,6 +1389,11 @@ static volatile int fs_creator_saving;
  * existing logs and docs still make sense. */
 static int fs_creator_slot;
 
+/* The ring's motion: same spring the shelf uses, in units of one wedge. */
+static fs_spring_t      fs_creator_spring;
+static fs_creator_spin_t fs_creator_spin;
+static uint32_t         fs_creator_anim_ms;
+
 /* The Fuji WB shift screen. */
 static volatile int fs_wb_active = 0;
 static volatile int fs_wb_dirty = 0;
@@ -4798,12 +4803,47 @@ static MENU_SELECT_FUNC(fs_wb_trigger) { fs_ui_launch(FS_VIEW_WB); }
  * OM shows behind the wheel is the live scene; what this shows is the wheel.
  */
 
+/*
+ * Redraw into the idle buffer and copy back only the ring's rows.
+ *
+ * fs_paint() copies all 480 rows in and out; a spin frame changes 12 small
+ * squares inside the disc, so paying that twice per frame is what made the
+ * screen feel like a still. The idle buffer already holds the previous frame,
+ * which is the same property that lets the shelf blit a band.
+ */
+static void fs_paint_beads(void (*fn)(void)) {
+  uint32_t t0 = get_ms_clock();
+  BMP_LOCK(bmp_draw_to_idle(1); fn(); bmp_draw_to_idle(0);
+           fs_blit_rows(1, FSG_CREATOR_RING_Y0, FSG_CREATOR_RING_Y1);)
+  ml_refresh_display_needed = 1;
+  fs_paint_account(get_ms_clock() - t0,
+                   FSG_CREATOR_RING_Y1 - FSG_CREATOR_RING_Y0);
+}
+
 static void fs_creator_render(void)
 {
-  if (fs_creator.screen == 0)
+  if (fs_creator.screen == 0) {
     fsg_draw_creator(&fs_creator);
-  else
+    /* fsg_draw_creator() drew the ring at the settled offset; tell the spin
+     * that is where the beads now are */
+    fs_creator_spin.valid = 0;
+    fsg_draw_creator_beads(&fs_creator, fs_creator_spring.x, &fs_creator_spin);
+  } else {
     fsg_draw_tone(&fs_creator);
+  }
+}
+
+/* One animation frame: advance the spring and redraw the beads if it moved. */
+/* the draw has to happen INSIDE the lock, with the idle buffer selected */
+static void fs_creator_draw_beads(void)
+{
+  fsg_draw_creator_beads(&fs_creator, fs_creator_spring.x, &fs_creator_spin);
+}
+
+static void fs_creator_anim(void)
+{
+  if (fs_spring_step(&fs_creator_spring, fs_creator.sel * 65536, 30))
+    fs_paint_beads(fs_creator_draw_beads);
 }
 
 /* Runs with the panel released. Formats the recipe off the key path. */
@@ -4865,6 +4905,13 @@ static int fs_creator_run(void) {
   beep_times(1);
 
   fs_creator_defaults(&fs_creator, "BASE: CLASSIC CHROME");
+  /* start settled: a spring beginning at 0 would spin the whole ring into
+   * place every time the screen opens */
+  fs_creator_spring.x = 0;
+  fs_creator_spring.v = 0;
+  fs_creator_spring.rem = 0;
+  fs_creator_spin.valid = 0;
+  fs_creator_anim_ms = get_ms_clock();
   fs_creator.sel = 0;
   fs_creator.field = 0;
   fs_creator.screen = 0;
@@ -4882,6 +4929,17 @@ static int fs_creator_run(void) {
     if (fs_creator_dirty) {
       fs_creator_dirty = 0;
       fs_paint(fs_creator_render);
+    }
+    /*
+     * The ring turns on a 30 ms clock, the same one the shelf scrolls on: a
+     * key press moves the TARGET and the ring springs to it, so a quick turn
+     * of the dial piles into one glide instead of jumping 30 degrees a press.
+     * Nothing repaints once the spring settles.
+     */
+    if (fs_creator.screen == 0 &&
+        get_ms_clock() - fs_creator_anim_ms >= 30) {
+      fs_creator_anim_ms = get_ms_clock();
+      fs_creator_anim();
     }
     if (fs_creator_save) {
       fs_creator_save = 0;

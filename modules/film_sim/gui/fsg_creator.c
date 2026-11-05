@@ -97,6 +97,16 @@ static void bead(int cx, int cy, int size, int colour)
 static const int sin30[12] = { 0, 500, 866, 1000, 866, 500,
                                0, -500, -866, -1000, -866, -500 };
 
+/* the ring's geometry, in one place: the static screen and the spin redraw
+ * must agree or a bead would be erased where it was not drawn */
+#define CREATOR_CX      196
+#define CREATOR_CY      250
+#define CREATOR_R_OUT   150
+#define CREATOR_R_BEAD  118
+#define CREATOR_R_IN    58
+#define CREATOR_BEAD_R  14      /* half the largest bead box                */
+#define CREATOR_DISC_BG FSG_PANEL_DARK
+
 static void ring_pos(int cx, int cy, int r, int i, int *ox, int *oy)
 {
     int s = sin30[((i % 12) + 12) % 12];
@@ -147,10 +157,83 @@ static void footer(const char *keys)
 
 /* ---- the wheel -------------------------------------------------------- */
 
+/* One wedge's bead. `sel` draws the halo and the inner disc. */
+static void draw_one_bead(const fs_creator_t *c, int i, int px, int py)
+{
+  int col = fs_creator_wedge_rgb(i);
+  int neutral = (c->sat[i] == 100 && c->rot[i] == 0 && c->lum[i] == 100);
+
+  if (i == c->sel) {
+    bead(px, py, 27, FSG_AMBER);
+    bead(px, py, 21, FSG_BG_DEEP);
+    bead(px, py, 17, col);
+  } else if (neutral) {
+    bead(px, py, 19, FSG_BG_DEEP);
+    rect_outline(px - 9, py - 9, 19, 19, col);
+    rect_outline(px - 8, py - 8, 17, 17, col);
+  } else {
+    bead(px, py, 19, col);
+    rect_outline(px - 10, py - 10, 21, 21, FSG_WHITE);
+  }
+}
+
+/*
+ * Rotate the ring by `offset_q16` of one wedge, redrawing only the beads.
+ *
+ * The bead for wedge i sits at (i - offset) * 30 degrees, so offset 0 puts
+ * wedge 0 at the top; increasing offset turns the ring the other way, which
+ * is the direction the dial turns.
+ */
+void fsg_draw_creator_beads(const fs_creator_t *c, int offset_q16,
+                            fs_creator_spin_t *sp)
+{
+  int i, nx[FS_CREATOR_WEDGES], ny[FS_CREATOR_WEDGES];
+
+  for (i = 0; i < FS_CREATOR_WEDGES; i++) {
+    /* tenths of a degree, from the fixed-point offset: 30 deg per wedge, 10
+     * units each, so 300 units a wedge and 65536/300 in Q */
+    int off10 = (int)(((long long)offset_q16 * 300) / 65536);
+    /* index 0 of sin30 is +x; the pointer is at the top, a quarter turn on */
+    int ang = (i * 300 - off10 + 900) % 3600;
+    int idx, s10, c10;
+    if (ang < 0) ang += 3600;
+    idx = (ang / 300) % 12;
+    /* linear interpolation between the 30-degree table entries */
+    {
+      int f = ang % 300;
+      int a = sin30[idx], b = sin30[(idx + 1) % 12];
+      s10 = a + (b - a) * f / 300;
+    }
+    {
+      int id2 = (idx + 3) % 12, f = ang % 300;
+      int a = sin30[id2], b = sin30[(id2 + 1) % 12];
+      c10 = a + (b - a) * f / 300;
+    }
+    nx[i] = CREATOR_CX + (CREATOR_R_BEAD * c10) / 1000;
+    ny[i] = CREATOR_CY - (CREATOR_R_BEAD * s10) / 1000;
+  }
+
+  /* erase the previous frame, then draw the new one */
+  if (sp->valid) {
+    for (i = 0; i < FS_CREATOR_WEDGES; i++)
+      fsg_fill(sp->x[i] - CREATOR_BEAD_R, sp->y[i] - CREATOR_BEAD_R,
+               29, 29, CREATOR_DISC_BG);
+  }
+  for (i = 0; i < FS_CREATOR_WEDGES; i++)
+    draw_one_bead(c, i, nx[i], ny[i]);
+
+  /* the pointer the ring turns past, redrawn because beads cross it */
+  fsg_fill(CREATOR_CX - 1, CREATOR_CY - CREATOR_R_OUT - 2, 3, 12, FSG_AMBER);
+  fsg_fill(CREATOR_CX - 4, CREATOR_CY - CREATOR_R_OUT - 6, 9, 3, FSG_AMBER);
+
+  for (i = 0; i < FS_CREATOR_WEDGES; i++) { sp->x[i] = nx[i]; sp->y[i] = ny[i]; }
+  sp->valid = 1;
+}
+
 void fsg_draw_creator(const fs_creator_t *c)
 {
-    const int cx = 196, cy = 250;
-    const int r_out = 150, r_bead = 118, r_in = 58;
+    const int cx = CREATOR_CX, cy = CREATOR_CY;
+    const int r_out = CREATOR_R_OUT, r_in = CREATOR_R_IN;
     char right[24];
     char value[32];
     int i;
@@ -165,36 +248,12 @@ void fsg_draw_creator(const fs_creator_t *c)
     disc(cx, cy, r_out, FSG_PANEL_DARK);
     disc(cx, cy, r_in - 8, FSG_BG_DEEP);
 
-    /* dotted guide ray from the inner circle out to the selected bead */
-    for (i = r_in + 6; i < r_bead - 10; i += 14) {
-        int px, py;
-        ring_pos(cx, cy, i, c->sel, &px, &py);
-        fsg_fill(px - 1, py - 1, 3, 3, FSG_AMBER_DIM);
-    }
-
-    for (i = 0; i < FS_CREATOR_WEDGES; i++) {
-        int px, py;
-        int col = fs_creator_wedge_rgb(i);
-        int is_sel = (i == c->sel);
-        /* a wedge whose numbers all sit at neutral is drawn hollow */
-        int neutral = (c->sat[i] == 100 && c->rot[i] == 0 && c->lum[i] == 100);
-
-        ring_pos(cx, cy, r_bead, i, &px, &py);
-        if (is_sel) {
-            bead(px, py, 27, FSG_AMBER);
-            bead(px, py, 21, FSG_BG_DEEP);
-            bead(px, py, 17, col);
-        } else if (neutral) {
-            /* untouched: hollow, so a screen full of hollow beads reads as
-             * "nothing authored yet" at a glance */
-            bead(px, py, 19, FSG_BG_DEEP);
-            rect_outline(px - 9, py - 9, 19, 19, col);
-            rect_outline(px - 8, py - 8, 17, 17, col);
-        } else {
-            bead(px, py, 19, col);
-            rect_outline(px - 10, py - 10, 21, 21, FSG_WHITE);
-        }
-    }
+    /*
+     * Beads are NOT drawn here. fsg_draw_creator_beads() owns them, because
+     * a full repaint can happen while the ring is still turning: drawing them
+     * here at the settled offset and again there at the spring's offset is
+     * two rings, which is exactly what the mid-spin render showed.
+     */
 
     /* Only the wedge name in the hub, and only when it fits: fsg_text fills
      * its background, so anything wider than the hole is a black bar across

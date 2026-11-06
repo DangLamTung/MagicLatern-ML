@@ -383,6 +383,27 @@ static void fs_log(const char *fmt, ...) {
 
 static volatile int fs_log_flushing = 0;
 
+
+/*
+ * Create a directory once, not on every call.
+ *
+ * FIO_CreateDirectory() checks is_dir() and returns early, so a repeat call
+ * is *supposed* to be harmless -- but only while that check succeeds. When it
+ * fails transiently (card busy, FIO cache, early boot) the raw create runs and
+ * FAT gets a SECOND directory entry with the same name. This card ended up
+ * with LOGS listed 17 times and FILMS three times, and fs_log_flush() was
+ * calling FIO_CreateDirectory("ML/LOGS") on every single flush.
+ *
+ * The flag is only set on success, so a call that happens before the card is
+ * mounted is retried rather than lost.
+ */
+static int fs_ensure_dir(const char *dir, int *done)
+{
+  if (*done) return 0;
+  if (FIO_CreateDirectory(dir) == 0) *done = 1;
+  return *done;
+}
+
 static void fs_log_flush(void) {
   uint32_t old_irq = cli();
   if (fs_log_flushing) {
@@ -399,7 +420,10 @@ static void fs_log_flush(void) {
     if (h - t > FS_LOG_BUF_SIZE)
       t = h - FS_LOG_BUF_SIZE;
 
-    FIO_CreateDirectory("ML/LOGS");
+    {
+      static int ok;
+      fs_ensure_dir("ML/LOGS", &ok);
+    }
     FILE *f = FIO_CreateFileOrAppend("ML/LOGS/FILMSIM.LOG");
     if (!f) {
       fs_log_tail = h;
@@ -704,7 +728,7 @@ static void fs_run_render_test(int preset, int strength, int grain) {
   fs_core_satboost = film_sim_satboost;
   fs_core_build_luts(&lut, &fs_presets[preset], strength, grain);
 
-  FIO_CreateDirectory("ML/FILMSIM");
+  { static int ok; fs_ensure_dir("ML/FILMSIM", &ok); }
 
   int yy, mo, dd, hh, mi, ss;
   fs_timestamp(&yy, &mo, &dd, &hh, &mi, &ss);
@@ -2065,7 +2089,7 @@ static void fs_slot_backup_task(void *unused) {
 
   /* Give DryOS property service time to deliver initial camera state */
   msleep(1000);
-  FIO_CreateDirectory("ML/LOGS");
+  { static int ok; fs_ensure_dir("ML/LOGS", &ok); }
 
   /* Check if a pre-existing SLOT1.BIN is on card */
   uint32_t init_len = 0;
@@ -5253,7 +5277,7 @@ static void fs_creator_save_task(void *unused) {
     return;
   }
   snprintf(path, sizeof path, "ML/FILM/%.8s.fs", name);
-  FIO_CreateDirectory("ML/FILM");
+  { static int ok; fs_ensure_dir("ML/FILM", &ok); }
   {
     FILE *f = FIO_CreateFile(path);
     int wrote = f ? FIO_WriteFile(f, buf, (size_t)n) : -1;
@@ -5541,7 +5565,7 @@ static void fs_fuji_save_task(void *unused) {
   if (!fs_fuji.name[0])   /* the Name row was never displayed */
     snprintf(fs_fuji.name, sizeof fs_fuji.name, "%s", fs_fuji_names[fs_fuji_slot]);
   snprintf(path, sizeof path, "ML/FILM/%.8s.fs", fs_fuji.name);
-  FIO_CreateDirectory("ML/FILM");
+  { static int ok; fs_ensure_dir("ML/FILM", &ok); }
   {
     FILE *f = FIO_CreateFile(path);
     int wrote = f ? FIO_WriteFile(f, buf, (size_t)n) : -1;
@@ -7969,7 +7993,7 @@ static void fs_lv_monitor_task(void *unused) {
  */
 static void fs_yuv_poll_task(void *unused) {
   (void)unused;
-  FIO_CreateDirectory("ML/FILMSIM");
+  { static int ok; fs_ensure_dir("ML/FILMSIM", &ok); }
   /* Grading telemetry. Without this the only sign that the hook ran was the
    * dump, which needs two calls -- so a session of single shots left no trace
    * either way and "is it grading?" was unanswerable from the log. */

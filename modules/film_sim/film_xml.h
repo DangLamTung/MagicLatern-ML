@@ -174,8 +174,13 @@ static int fs_load_films_xml(void)
 {
     fs_populate_builtins();
 
-    /* Ensure directory exists */
-    FIO_CreateDirectory(FILM_DIR);
+    /* Ensure the directory exists ONCE. FIO_CreateDirectory() only returns
+     * early while its is_dir() check succeeds; a transient failure makes it
+     * create a duplicate FAT entry, and this ran on every catalogue reload. */
+    {
+        static int dir_ok;
+        if (!dir_ok && FIO_CreateDirectory(FILM_DIR) == 0) dir_ok = 1;
+    }
 
     struct fio_file *file = alloc_fio_file();
     if (!file) return film_active_count;

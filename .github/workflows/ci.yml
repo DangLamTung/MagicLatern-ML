@@ -38,3 +38,30 @@ jobs:
       - name: Unit tests for the ROM analysis tool
         working-directory: modules/film_sim/tools/romfind
         run: ./selftest.py
+
+  # The screens are documentation: README images are rendered from this code, so
+  # a drawing change that stops it compiling silently rots every picture in the
+  # repo. This builds both preview tools and runs the shelf one -- it prints
+  # BAND CHECK PASS only if drawing the strip band alone gives the same pixels as
+  # drawing the whole screen.
+  screens:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the screen preview tools
+        run: |
+          set -e
+          M=modules/film_sim
+          gcc -O1 -Wall -I$M $M/tools/gui_preview/preview.c \
+              $M/gui/fsg.c $M/gui/fsg_host.c $M/gui/fsg_dat.c \
+              -o /tmp/fsg_preview -lm
+          gcc -O1 -Wall -I$M $M/tools/gui_preview/creator_preview.c \
+              $M/gui/fsg.c $M/gui/fsg_host.c $M/gui/fsg_dat.c \
+              $M/gui/fsg_creator.c $M/gui/fsg_wb.c -o /tmp/fsg_creator -lm
+      - name: Draw every screen
+        run: |
+          set -e
+          /tmp/fsg_preview
+          /tmp/fsg_creator edited
+          /tmp/fsg_preview 2>&1 | grep -q "BAND CHECK PASS"
+          ls /tmp/fsg_anim*.ppm | wc -l

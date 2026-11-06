@@ -52,11 +52,11 @@ int main(int argc, char **argv)
     fs_creator_t c;
 
     fsg_reset();
-    fs_creator_defaults(&c, "BASE: CLASSIC CHROME");
+    fs_creator_defaults(&c, "BASE: FLAT - SELF-CONTAINED");
     dump("creator0");
 
     fsg_reset();
-    fs_creator_defaults(&c, "BASE: CLASSIC CHROME");
+    fs_creator_defaults(&c, "BASE: FLAT - SELF-CONTAINED");
     if (edited) {
         /* a look somebody actually authored: blue up, greens down and
          * rotated, spring lifted a little -- the shape of a real recipe */

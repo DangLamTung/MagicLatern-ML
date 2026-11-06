@@ -8,6 +8,7 @@
 #include <string.h>
 
 #include "gui/fsg.h"
+#include "gui/fs_spring.h"
 
 extern unsigned char fsg_fb[FSG_H][FSG_W][3];
 struct txt_item { int x, y, size, fg, bg; char s[128]; };
@@ -264,6 +265,65 @@ int main(int argc, char **argv)
             fsg_draw_shelf(&s);
             dump(name);
         }
+    }
+
+    /* The strip gliding between two stocks.
+     *
+     * The motion is the camera's own spring (gui/fs_spring.h), stepped on the
+     * 30 ms clock the shelf loop runs on, so these are the positions the panel
+     * is actually painted at -- not an interpolation of the start and the end.
+     * Three stocks of travel is the case fs_spring.h documents its constants
+     * against. render.py --gif assembles the frames into an animation. */
+    {
+        /* CineStill 800T is three slots along the strip from Portra 400 -- the
+         * travel fs_spring.h documents its constants against. The two indices
+         * are different numbers: `fi` addresses the harness's film table, `li`
+         * the strip's label order, and the highlight follows `li`. */
+        const int fi = 2, li = 3;
+        fs_spring_t sp;
+        char counter[16];
+        int n = 0;
+
+        snprintf(counter, sizeof counter, "%02d / %02d", li + 1, NLABELS);
+        memset(&sp, 0, sizeof sp);
+        for (;;) {
+            fsg_shelf_t s;
+            memset(&s, 0, sizeof s);
+            s.badge = "LEVEL 2  -  STYLE + GRADE";
+            s.counter = counter;
+            stock(&s.stock, films[fi].name, films[fi].code,
+                  films[fi].brand, films[fi].kind, films[fi].desc,
+                  films[fi].soup, films[fi].iso, films[fi].kelvin,
+                  films[fi].gm, films[fi].sat, films[fi].mono);
+            fill_strip(&s);
+            s.grain = 8;
+            s.strength = 100;
+            strip_sel(&s, films[fi].name, fi);
+            s.sel = li;
+            s.scroll = sp.x >> 8;
+            s.tick = 900u + (unsigned)n * 30u;
+            {
+                int can = can_index(films[fi].name);
+                if (can >= 0 && fsg_can_pick(can))
+                    fsg_can_reprogram();
+                else {
+                    fsg_img_set(NULL, 0, 0);
+                    fsg_pal(s.stock.palette, FSG_NSLOT);
+                }
+            }
+            fsg_reset();
+            fsg_draw_shelf(&s);
+            {
+                char name[16];
+                snprintf(name, sizeof name, "anim%02d", n);
+                dump(name);
+            }
+            n++;
+            if (!fs_spring_step(&sp, li * 65536, 30) || n >= 40)
+                break;
+        }
+        printf("anim: %d frames, settled at %d.%02d frames\n", n, sp.x >> 16,
+               ((sp.x >> 8) & 255) * 100 / 256);
     }
 
     /* the darkroom is the shelf drawer pointed at a frame */

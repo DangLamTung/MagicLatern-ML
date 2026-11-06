@@ -50,8 +50,30 @@ def available():
     return names
 
 
+def build_gif(names, out_path, duration_ms=30):
+    """Assemble animation frames into a GIF.
+
+    Frames are the screens the camera drew, in the order the spring produced
+    them, so the timing in the GIF is the timing in FSG's 30 ms shelf loop.
+    """
+    frames = [render(n) for n in names]
+    pal = [f.convert("RGB").quantize(colors=128, method=Image.MEDIANCUT)
+           for f in frames]
+    pal[0].save(out_path, save_all=True, append_images=pal[1:],
+                duration=duration_ms, loop=0, optimize=True, disposal=2)
+    print(f"{out_path}  {len(frames)} frames @ {duration_ms} ms")
+
+
 def main():
-    names = sys.argv[1:] or available()
+    argv = sys.argv[1:]
+    if argv and argv[0] == "--gif":
+        if len(argv) < 3:
+            sys.exit("usage: render.py --gif out.gif anim00 anim01 ...")
+        build_gif(argv[2:], argv[1])
+        return
+    # animNN are the strip glide, one GIF's worth of frames -- not something to
+    # paste into the contact sheet unasked.
+    names = argv or [n for n in available() if not n.startswith("anim")]
     if not names:
         sys.exit("no /tmp/fsg_*.ppm frames: run the preview first")
     frames = [(n, render(n)) for n in names]

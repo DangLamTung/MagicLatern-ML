@@ -5459,9 +5459,14 @@ static int fs_creator_run(void) {
 
   /* Reopening the screen used to call fs_creator_defaults() every time, which
    * threw away twelve wedges of work with no warning. The look now survives
-   * leaving the screen; User Look > Reset Look is how it starts over. */
+   * leaving the screen; User Look > Reset Look is how it starts over.
+   *
+   * The subtitle says FLAT because that is what the recipe is: fs_creator_write
+   * emits its own identity curve and neutral wheel, WB AS_SHOT -- nothing of a
+   * stock is carried in. It used to read "BASE: CLASSIC CHROME", which named a
+   * stock the saved .fs does not contain. */
   if (!fs_creator_initialised) {
-    fs_creator_defaults(&fs_creator, "BASE: CLASSIC CHROME");
+    fs_creator_defaults(&fs_creator, "BASE: FLAT - SELF-CONTAINED");
     fs_creator_initialised = 1;
   }
   fs_name_sync();

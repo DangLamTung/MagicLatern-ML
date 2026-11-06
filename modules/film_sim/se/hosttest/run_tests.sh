@@ -11,7 +11,8 @@ cd "$(dirname "$0")" || exit 1
 if [ "${1:-}" != "--no-build" ]; then
     make -s all >/dev/null 2>&1 || { echo "BUILD FAILED"; make -s all; exit 1; }
     make -s tableerr creatorwrite fujiwrite rampchk >/dev/null 2>&1 || {
-        echo "BUILD FAILED (extra tests)"; exit 1; }
+        echo "BUILD FAILED (extra tests)"; make tableerr creatorwrite fujiwrite rampchk
+        exit 1; }
 fi
 
 fail=0

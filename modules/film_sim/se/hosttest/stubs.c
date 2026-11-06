@@ -1,3 +1,11 @@
+/* fseeko/ftello are POSIX, and the harness builds with -std=c99, which sets
+ * __STRICT_ANSI__ and hides them on glibc. macOS declares them anyway, so this
+ * only ever broke on Linux - including in CI, where it was the whole reason the
+ * first run went red. Must come before any header. */
+#if defined(__linux__) && !defined(_POSIX_C_SOURCE)
+#define _POSIX_C_SOURCE 200809L
+#endif
+
 #include <stdio.h>
 #include <stdint.h>
 

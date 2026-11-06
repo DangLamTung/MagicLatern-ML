@@ -8,6 +8,12 @@
 #include <stdio.h>
 #include <string.h>
 #include <math.h>
+
+/* M_PI is not in ISO C: glibc hides it under -std=c99, macOS defines it
+ * anyway. This only ever broke on Linux. */
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
 #include "se/engine/stock.h"
 #include "se/engine/look.h"
 #include "se/engine/lut.h"

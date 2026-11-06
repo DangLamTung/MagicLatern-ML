@@ -75,6 +75,12 @@ lv3d: lv3d.c $(SE_DIR)/se_libgcc.c $(SE_DIR)/../fs_yuvlook.c $(ENG_SRC) stubs.c
 tableerr: tableerr.c $(SE_DIR)/se_libgcc.c $(SE_DIR)/../fs_yuvlook.c $(ENG_SRC) stubs.c
 	$(CC) $(CFLAGS) $(CPPFLAGS) -o $@ $^ $(LDLIBS)
 
+# rampchk needs the engine like every other test. Without this rule make falls
+# back to its built-in "cc rampchk.c -lm", which links nothing and fails on the
+# first se_stock_* symbol.
+rampchk: rampchk.c $(SE_DIR)/se_libgcc.c $(ENG_SRC) stubs.c
+	$(CC) $(CFLAGS) $(CPPFLAGS) -o $@ $^ $(LDLIBS)
+
 grade_jpeg: grade_jpeg.c $(SE_DIR)/se_cam.c $(SE_DIR)/se_libgcc.c $(ENG_SRC) stubs.c
 	$(CC) $(CFLAGS) $(CPPFLAGS) -o $@ $^ $(LDLIBS)
 

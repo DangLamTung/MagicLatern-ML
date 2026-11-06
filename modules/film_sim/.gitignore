@@ -25,3 +25,14 @@ SLOT*.BIN
 
 # Calibration output: regenerate with tools/calib/calibrate.py
 modules/film_sim/tools/calib/out/
+se/hosttest/bench_grade
+se/hosttest/creatorwrite
+se/hosttest/fujiwrite
+se/hosttest/lutchk
+se/hosttest/lv3d
+se/hosttest/rampchk
+se/hosttest/refchk
+se/hosttest/tabledump
+se/hosttest/tableerr
+se/hosttest/springtest
+se/hosttest/fs2cube

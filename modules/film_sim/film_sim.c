@@ -5073,6 +5073,143 @@ static void fs_register_look(const char *name, const char *desc)
   fs_log_flush();
 }
 
+
+static int fs_watch_hits;
+
+/* ------------------------------------------------- recipe inbox watcher
+ *
+ * The transport is somebody else's problem: an Eye-Fi card uploads, a card
+ * reader copies, a phone with an SD slot writes. What none of them can do is
+ * tell the module that a file appeared -- fs_load_films_xml() runs at boot and
+ * after a save, so a recipe dropped on the card needs a reboot before it can
+ * be shot. This is that missing half.
+ *
+ * It exists because the 6D cannot do better. strings on the firmware's own
+ * ROM1.BIN finds Eye-Fi menus and status icons and no WLAN stack: this body
+ * has no socket API at all -- 6D_116.sym has zero wlan or socket symbols --
+ * so there is nothing in ML to call. The card is the interface.
+ *
+ * The rule is the same one fs_auto_task uses for a new frame -- a file is
+ * only touched once its size has been the same across two polls -- so a
+ * half-written .fs is never parsed.
+ */
+/* Hash of "every .fs in ML/FILM, name and size". Cheap, and it changes when a
+ * file is added, removed, renamed or rewritten. */
+static unsigned int fs_film_dir_sig(int *count_out)
+{
+  struct fio_file *file = alloc_fio_file();
+  struct fio_dirent *dirent;
+  unsigned int sig = 2166136261u;
+  int n = 0;
+
+  if (!file) return 0;
+  dirent = FIO_FindFirstEx("ML/FILM", file);
+  if (IS_ERROR(dirent)) { free(file); return 0; }
+
+  do {
+    struct file_info fi = convert_fio_file_info(file);
+    int len;
+    if (fi.mode & ATTR_DIRECTORY) continue;
+    len = strlen(fi.name);
+    if (len < 4) continue;
+    if (strcasecmp(fi.name + len - 3, ".fs") != 0) continue;
+    {
+      char full[96];
+      uint32_t size = 0;
+      int k;
+      snprintf(full, sizeof full, "ML/FILM/%s", fi.name);
+      FIO_GetFileSize(full, &size);
+      for (k = 0; fi.name[k]; k++)
+        sig = (sig ^ (unsigned char)fi.name[k]) * 16777619u;
+      sig = (sig ^ size) * 16777619u;
+      n++;
+    }
+  } while (FIO_FindNextEx(dirent, file) == 0);
+
+  free(file);
+  if (count_out) *count_out = n;
+  return sig;
+}
+
+static void fs_film_watch_task(void *unused)
+{
+  unsigned int known = 0;
+  unsigned int pending = 0;
+
+  /* the catalogue was just loaded, so this is the state on disk */
+  {
+    int n0 = 0;
+    known = fs_film_dir_sig(&n0);
+    fs_log("watch: ML/FILM has %d recipe(s), watching for more", n0);
+    fs_log_flush();
+  }
+
+  while (1) {
+    unsigned int sig;
+    msleep(3000);
+
+    /* never reload the table out from under a screen that is reading it */
+    if (fs_gui_active || fs_darkroom_active || fs_creator_active || fs_wb_active)
+      continue;
+
+    sig = fs_film_dir_sig(NULL);
+    if (sig != pending) {
+      /* changed since last poll: not stable yet, wait for the next one */
+      pending = sig;
+      fs_watch_hits = 0;
+      continue;
+    }
+    if (++fs_watch_hits < 2)
+      continue;
+    if (sig == known)
+      continue;     /* stable, but nothing new */
+
+    fs_watch_hits = 0;
+    known = sig;
+    /*
+     * Remember the active stock BY NAME. fs_load_films_xml() rebuilds the table
+     * from a directory listing, so an index that was valid before the reload
+     * can point at a different film afterwards -- dropping FILM/AAA.fs in
+     * front of the current stock would silently change what the camera is
+     * shooting, with nothing on screen to say so.
+     */
+    {
+      char was[40];
+      int was_idx = (film_active_count > 0)
+                  ? fs_clamp_i(film_sim_stock, 0, film_active_count - 1) : -1;
+      was[0] = 0;
+      if (was_idx >= 0) snprintf(was, sizeof was, "%s", film_active_table[was_idx].name);
+
+      fs_log("watch: ML/FILM changed, reloading the catalogue");
+      fs_log_flush();
+      fs_load_films_xml();
+      fs_group_by_artwork();
+
+      if (was[0] && film_active_count > 0) {
+        int i, found = -1;
+        for (i = 0; i < film_active_count; i++)
+          if (!strcasecmp(film_active_table[i].name, was)) { found = i; break; }
+        if (found >= 0 && found != was_idx) {
+          film_sim_stock = found;
+          fs_log("watch: '%s' moved %d -> %d, followed it", was, was_idx, found);
+          fs_log_flush();
+        } else if (found < 0) {
+          fs_log("watch: '%s' is no longer on the card, stock index reset", was);
+          fs_log_flush();
+          film_sim_stock = fs_clamp_i(film_sim_stock, 0, film_active_count - 1);
+        }
+      }
+    }
+    {
+      int n = 0;
+      fs_film_dir_sig(&n);
+      fs_log("watch: reloaded, %d recipe(s) on the card, %d stocks loaded",
+             n, film_active_count);
+      fs_log_flush();
+    }
+  }
+}
+
 static void fs_creator_save_task(void *unused) {
   char buf[2048];
   char path[64];
@@ -7995,6 +8132,7 @@ static unsigned int film_sim_init() {
   /* always mirror the flavor slots to the card: cheap and makes any
    * write reversible */
   task_create("fs_slots", 0x1e, 0x2000, fs_slot_backup_task, 0);
+  task_create("fs_watch", 0x1e, 0x2000, fs_film_watch_task, 0);
 
   {
     static const char *const psflag = "ML/SETTINGS/PSPROBE.TST";

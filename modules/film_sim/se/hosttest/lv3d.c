@@ -499,7 +499,7 @@ int main(int argc, char **argv)
                  256 + SE_YUV3_NODES * 3 * 2);
         stat_show(nm, &s_lat);
     }
-    stat_show("separable shot tables, 3084 B", &s_shot);
+    stat_show("separable shot tables, 9228 B", &s_shot);
     stat_show("LV preset form, a DIFFERENT look", &s_preset);
     printf("\ncost on this Mac, best of %d passes\n", PASSES);
     printf("  %-30s %7.2f ms/frame\n", "joint (y,u,v) lattice", t_lat);

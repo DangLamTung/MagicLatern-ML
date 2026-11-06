@@ -3398,6 +3398,10 @@ static void fs_picture_sync(void) {
  * canister's own palette when one is loaded, else the fifteen stock colours the
  * drawn cassette needs. Every frame, because bmp_on() restores all 256 entries
  * from ML's shadows and would otherwise wipe them. */
+/* the cache above has to be reachable from fs_screen_release() */
+static int fs_pal_last_code;
+static uint32_t fs_pal_last_ms;
+
 static void fs_picture_palette(const int *slots) {
   /* Programming 170 overlay entries is 340 ENGIO writes; doing that on every
    * redraw is pointless churn on a bus Canon also uses. Program once per
@@ -3408,14 +3412,12 @@ static void fs_picture_palette(const int *slots) {
    * rate: band repaints make the shelf call this more often, so it would have
    * increased the ENGIO traffic for nothing. A fixed 250 ms does not depend on
    * how often the screen is painted. */
-  static int last_code;
-  static uint32_t last_ms;
   int code = fs_last_pic_idx;
 
-  if (code == last_code && get_ms_clock() - last_ms < 250)
+  if (code == fs_pal_last_code && get_ms_clock() - fs_pal_last_ms < 250)
     return;
-  last_code = code;
-  last_ms = get_ms_clock();
+  fs_pal_last_code = code;
+  fs_pal_last_ms = get_ms_clock();
 
   if (fsg_can_ready())
     fsg_can_reprogram();
@@ -3778,6 +3780,12 @@ static void fs_screen_take(void) {
 
 static void fs_screen_release(void) {
   fsg_pal_reset();  /* hand the borrowed palette entries back */
+  /* and invalidate the cache that decides when to program them again: it was
+   * comparing against the stock code only, so coming back to the same stock
+   * within 250 ms of leaving a screen skipped the reprogram and drew one or
+   * two frames with Canon's palette instead of the film's. */
+  fs_pal_last_code = -1;
+  fs_pal_last_ms = 0;
   fsg_can_unload(); /* and let go of the artwork file */
   gui_uilock(
       UILOCK_NONE); /* keys belong to Canon again, before we ask for a mode */

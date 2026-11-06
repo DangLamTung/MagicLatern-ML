@@ -523,7 +523,7 @@ int main(int argc, char **argv)
             }
 
             printf("\n3D forms of the same look, same samples, against the same develop\n");
-            printf("  %-34s %s\n", "shipping tables 2x2D (3084 B)", "(see 'all' above)");
+            printf("  %-34s %s\n", "shipping tables 2x2D (9228 B)", "(see 'all' above)");
             stat_show("17^3 RGB cube, tetrahedral", &s_cube);
             stat_show("joint (y,u,v) 8^3, 3.0 KB", &s_j8);
             stat_show("joint (y,u,v) 12^3, 10.1 KB", &s_j12);

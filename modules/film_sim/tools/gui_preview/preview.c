@@ -272,14 +272,15 @@ int main(int argc, char **argv)
      * The motion is the camera's own spring (gui/fs_spring.h), stepped on the
      * 30 ms clock the shelf loop runs on, so these are the positions the panel
      * is actually painted at -- not an interpolation of the start and the end.
-     * Three stocks of travel is the case fs_spring.h documents its constants
-     * against. render.py --gif assembles the frames into an animation. */
+     * render.py --gif assembles the frames into an animation.
+     *
+     * The two indices are different numbers: `fi` addresses this harness's film
+     * table, `li` the strip's label order, and the highlight follows `li`. The
+     * glide is three slots -- the travel fs_spring.h documents its constants
+     * against. */
     {
-        /* CineStill 800T is three slots along the strip from Portra 400 -- the
-         * travel fs_spring.h documents its constants against. The two indices
-         * are different numbers: `fi` addresses the harness's film table, `li`
-         * the strip's label order, and the highlight follows `li`. */
         const int fi = 2, li = 3;
+        const int target = li * 65536;
         fs_spring_t sp;
         char counter[16];
         int n = 0;
@@ -298,8 +299,15 @@ int main(int argc, char **argv)
             fill_strip(&s);
             s.grain = 8;
             s.strength = 100;
+            /* Pairs the panel with the strip by name, and stops the render if
+             * the two orders ever disagree -- that mismatch is what made an
+             * earlier frame highlight one stock while describing another. */
             strip_sel(&s, films[fi].name, fi);
-            s.sel = li;
+            if (s.sel != li) {
+                fprintf(stderr, "anim: '%s' is slot %d, not %d\n",
+                        films[fi].name, s.sel, li);
+                return 1;
+            }
             s.scroll = sp.x >> 8;
             s.tick = 900u + (unsigned)n * 30u;
             {
@@ -319,11 +327,14 @@ int main(int argc, char **argv)
                 dump(name);
             }
             n++;
-            if (!fs_spring_step(&sp, li * 65536, 30) || n >= 40)
+            if (!fs_spring_step(&sp, target, 30) || n >= 40)
                 break;
         }
         printf("anim: %d frames, settled at %d.%02d frames\n", n, sp.x >> 16,
                ((sp.x >> 8) & 255) * 100 / 256);
+        if (sp.x != target)
+            printf("anim: NOT SETTLED -- %d of %d, the last frame is mid-glide\n",
+                   sp.x, target);
     }
 
     /* the darkroom is the shelf drawer pointed at a frame */

@@ -46,6 +46,46 @@ def cstr(d, off, n=60):
         return None
     return t if len(t) >= 4 and t.isprintable() else None
 
+
+def _ror(v, r):
+    r &= 31
+    return ((v >> r) | (v << (32 - r))) & 0xFFFFFFFF if r else v
+
+def find_adr(d, base, target, tol=8):
+    """
+    PC-relative references, which leave no literal in a pool.
+
+    ARM  ADR  = ADD/SUB Rd, PC, #imm  -> 0xE28F0xxx / 0xE24F0xxx (cond varies)
+    Thumb ADR = ADD Rd, PC, #imm8*4   -> 0xA000 | Rd<<8 | imm8
+
+    This is why "halt all sockets" showed no xref: a string used through ADR
+    has no 32-bit word pointing at it, and a literal-pool scan can never find
+    it. Both forms are checked here; the ARM PC bias is +8, the Thumb ADR bias
+    is +4 from the instruction's own address rounded to 4.
+    """
+    out = []
+    a = array.array('I')
+    a.frombytes(d[:len(d) // 4 * 4])
+    if struct.pack('<I', 1) != struct.pack('=I', 1):
+        a.byteswap()
+    for i, w in enumerate(a):
+        pc = base + i * 4
+        op = w & 0x0FFF0000
+        if op in (0x028F0000, 0x024F0000):          # ARM add/sub rd, pc, #imm
+            imm = _ror(w & 0xFF, ((w >> 8) & 0xF) * 2)
+            v = pc + 8 + imm if op == 0x028F0000 else pc + 8 - imm
+            if any(v == target + k for k in range(tol)):
+                out.append((pc, 'arm adr/add', v))
+        # Thumb: two halfwords, so step on 2-byte grid
+    for i in range(0, len(d) - 1, 2):
+        hw = struct.unpack_from('<H', d, i)[0]
+        if (hw & 0xF800) == 0xA000:                  # thumb ADR
+            pc = base + ((i + 4) & ~3)
+            v = pc + (hw & 0xFF) * 4
+            if any(v == target + k for k in range(tol)):
+                out.append((base + i, 'thumb adr', v))
+    return out
+
 def cmd_base(path):
     d, a = load(path)
     # The score is the FRACTION of in-range pointers that land on a readable
@@ -87,14 +127,29 @@ def cmd_xref(path, base, text):
         if w == base + off or w == base + off + 1:
             refs.append(i * 4)
     if not refs:
-        print('no absolute pointer to it. Either it is referenced from the other')
-        print('ROM image, or the address is computed at run time (offset table).')
-        return 2
+        print('no absolute pointer. Trying PC-relative ADR, which leaves no')
+        print('literal in a pool -- the likely reason the pool scan found nothing.')
+        found = find_adr(d, base, base + off)
+        if not found:
+            print('no ADR either. The reference is then in the other ROM image,')
+            print('or the string is only reached through a computed offset.')
+            return 2
+        for pc, kind, v in found[:10]:
+            print('  %s at 0x%08x -> 0x%08x  (file offset 0x%08x)'
+                  % (kind, pc, v, pc - base))
+        print('  those are instruction addresses, not function entries: use')
+        print("  ./romfind.py func <img> <base> 0x<addr> on one of them.")
+        return 0
     for r in refs[:10]:
         print('  referenced by a literal at file offset 0x%08x' % r)
     return 0
 
 def cmd_func(path, base, off, span=0x600):
+    # Accept an ADDRESS as well as a file offset. xref prints addresses, and
+    # asking a human to subtract the base from a 16 MB image by hand is how a
+    # wrong function gets disassembled and a wrong address ends up in the .sym.
+    if off >= base:
+        off -= base
     off &= ~1                       # a Thumb cross-reference has bit 0 set
     start = off - span
     if start < 0:

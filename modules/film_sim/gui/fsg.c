@@ -3,7 +3,7 @@
  *
  * Only fsg_fill() and fsg_text() touch the panel, so this file is compiled
  * unchanged for the camera (gui/fsg_ml.c) and for the desktop preview
- * (tools/gui_preview/fsg_host.c). That is deliberate: what you see rendered
+ * (gui/fsg_host.c). That is deliberate: what you see rendered
  * on a Mac is the same code that draws on the 6D, pixel for pixel.
  */
 #include <stdarg.h>

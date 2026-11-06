@@ -65,9 +65,9 @@ bench_grade: bench_grade.c $(SE_DIR)/se_libgcc.c $(SE_DIR)/../fs_yuvlook.c $(ENG
 fujiwrite: fujiwrite.c ../../gui/fs_fuji.c $(SE_DIR)/se_libgcc.c $(ENG_SRC) stubs.c
 	$(CC) -I../../.. $(CFLAGS) $(CPPFLAGS) -o $@ $^ $(LDLIBS)
 
-creatorwrite: creatorwrite.c ../../gui/fsg_creator.c ../../../../../tools/gui_preview/fsg_host.c \
+creatorwrite: creatorwrite.c ../../gui/fsg_creator.c ../../gui/fsg_host.c \
               $(SE_DIR)/se_libgcc.c $(ENG_SRC) stubs.c
-	$(CC) -I../../.. -I../../../../../tools/gui_preview $(CFLAGS) $(CPPFLAGS) -o $@ $^ $(LDLIBS)
+	$(CC) -I../../.. $(CFLAGS) $(CPPFLAGS) -o $@ $^ $(LDLIBS)
 
 lv3d: lv3d.c $(SE_DIR)/se_libgcc.c $(SE_DIR)/../fs_yuvlook.c $(ENG_SRC) stubs.c
 	$(CC) $(CFLAGS) $(CPPFLAGS) -o $@ $^ $(LDLIBS)

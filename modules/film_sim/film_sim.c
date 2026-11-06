@@ -5254,6 +5254,109 @@ static void fs_film_watch_task(void *unused)
   }
 }
 
+
+/* ------------------------------------------------ sharing a look off the card
+ *
+ * "Transfer the recipe over WiFi" has two halves and only one of them is
+ * blocked. Inbound already works: fs_film_watch_task() adopts any .fs that
+ * appears in ML/FILM. Outbound is the blocked half -- Canon's stack is not
+ * exported, and docs/wifi-functions.md records how far that got.
+ *
+ * What a module CAN do today is put the look somewhere a transport can find
+ * it. ML/SHARE is that place: one flat folder, the recipe under its own name,
+ * plus a readable summary, so a card reader, a phone with an SD slot, or
+ * Canon's desktop utility can pull it without knowing this module exists.
+ *
+ * It is deliberately NOT DCIM: Canon's file listing is object-shaped (PTP),
+ * and dropping a .fs among the photos would put a non-image where the camera
+ * expects images. Keeping it in ML/SHARE means the card stays a card.
+ */
+#define FS_SHARE_DIR "ML/SHARE"
+
+static void fs_share_look_task(void *unused)
+{
+  char src[FS_PATH_LEN];
+  char dst[80], txt[80];
+  char name[40];
+  uint32_t size = 0;
+  int n = 0;
+
+  { static int ok; fs_ensure_dir(FS_SHARE_DIR, &ok); }
+
+  if (!fs_active_stock_path(src, sizeof src, NULL)) {
+    fs_log("share: no active stock, nothing to share");
+    fs_log_flush();
+    NotifyBox(1800, "Share: no active stock");
+    return;
+  }
+
+  /* the recipe's own name, so the file that arrives is self-describing */
+  {
+    const char *leaf = strrchr(src, '/');
+    leaf = leaf ? leaf + 1 : src;
+    snprintf(name, sizeof name, "%.39s", leaf);
+  }
+
+  {
+    FILE *in = FIO_OpenFile(src, O_RDONLY | O_SYNC);
+    FILE *out;
+    char buf[512];
+    int got;
+    if (!in) {
+      fs_log("share: cannot open %s", src);
+      fs_log_flush();
+      NotifyBox(1800, "Share: cannot read the recipe");
+      return;
+    }
+    snprintf(dst, sizeof dst, FS_SHARE_DIR "/%.40s.fs", name);
+    out = FIO_CreateFile(dst);
+    if (!out) {
+      FIO_CloseFile(in);
+      fs_log("share: cannot create %s", dst);
+      fs_log_flush();
+      NotifyBox(1800, "Share: cannot write ML/SHARE");
+      return;
+    }
+    while ((got = FIO_ReadFile(in, buf, sizeof buf)) > 0) {
+      FIO_WriteFile(out, buf, got);
+      n += got;
+    }
+    FIO_CloseFile(in);
+    FIO_CloseFile(out);
+    FIO_GetFileSize(dst, &size);
+  }
+
+  /* a plain-text note beside it: the same look, readable without this module */
+  snprintf(txt, sizeof txt, FS_SHARE_DIR "/%.40s.txt", name);
+  {
+    FILE *f = FIO_CreateFile(txt);
+    if (f) {
+      char line[200];
+      int m = snprintf(line, sizeof line,
+          "Film simulation recipe shared from Magic Lantern film_sim.\n"
+          "File:    ML/SHARE/%.40s.fs (%d bytes)\n"
+          "Source:  %s\n"
+          "Use:     copy the .fs into ML/FILM on another camera; the watch task\n"
+          "         adopts it within a few seconds, no reboot.\n"
+          "Look:    selected with Film Dev > Film Look > Stock, or 12 wedge\n"
+          "         values in Color Creator (Custom Look).\n",
+          name, (int)size, src);
+      if (m > 0) FIO_WriteFile(f, line, m);
+      FIO_CloseFile(f);
+    }
+  }
+
+  fs_log("share: wrote %s (%d bytes) and %s", dst, n, txt);
+  fs_log_flush();
+  NotifyBox(2000, "Shared %s", name);
+}
+
+static void fs_share_look_trigger(void *priv, int delta)
+{
+  (void)priv; (void)delta;
+  task_create("fs_share", 0x1e, 0x2000, fs_share_look_task, 0);
+}
+
 static void fs_creator_save_task(void *unused) {
   char buf[2048];
   char path[64];
@@ -7697,6 +7800,17 @@ static struct menu_entry fs_menu_userlook[] = {
         .select = fs_user_look_select,
         .icon_type = IT_ACTION,
         .help = "Make ML/FILM/WHEEL4.fs the active look.",
+    },
+    {
+        .name = "Share Active Look",
+        .select = fs_share_look_trigger,
+        .icon_type = IT_ACTION,
+        .help = "Copy the active stock's recipe and a readable summary into "
+                "ML/SHARE, where any transport can pick them up (card reader, "
+                "phone with an SD slot, or Canon's desktop utility). Inbound "
+                "already works: drop a .fs into ML/FILM and it is adopted "
+                "within seconds. WiFi push straight from this menu is not "
+                "implemented -- see docs/wifi-functions.md.",
     },
     {
         .name = "Look Name",

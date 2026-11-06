@@ -1,0 +1,40 @@
+# CI for the module repo.
+#
+# Two jobs, because they fail for different reasons and one must never mask the
+# other:
+#
+#   host-tests   compiles the engine and the host harnesses with the system
+#                compiler and runs them. No camera, no ARM toolchain, seconds.
+#                This is the gate: it covers the look engine, the recipe
+#                writers and the neutral-ramp bound.
+#   romfind      unit tests for the ROM analysis tool on synthetic images.
+#
+# The ARM build is NOT here on purpose: build.sh expects the bundled toolchain
+# under toolchain/ and Canon's firmware layout, and a red CI that fails for
+# environment reasons teaches people to ignore CI. It is run locally with
+# ./build.sh 6D.116 and the result is checked against the card.
+
+name: ci
+
+on:
+  push:
+    branches: [dev, main, master]
+  pull_request:
+
+jobs:
+  host-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build and run every host test
+        working-directory: modules/film_sim/se/hosttest
+        run: ./run_tests.sh
+
+  romfind:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Unit tests for the ROM analysis tool
+        working-directory: modules/film_sim/tools/romfind
+        run: ./selftest.py

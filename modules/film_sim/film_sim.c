@@ -5317,12 +5317,22 @@ static void fs_share_look_task(void *unused)
       NotifyBox(1800, "Share: cannot write ML/SHARE");
       return;
     }
-    while ((got = FIO_ReadFile(in, buf, sizeof buf)) > 0) {
-      FIO_WriteFile(out, buf, got);
-      n += got;
+    {
+      int wrote_all = 1;
+      while ((got = FIO_ReadFile(in, buf, sizeof buf)) > 0) {
+        if (FIO_WriteFile(out, buf, got) != got) { wrote_all = 0; break; }
+        n += got;
+      }
+      FIO_CloseFile(in);
+      FIO_CloseFile(out);
+      if (!wrote_all) {
+        FIO_RemoveFile(dst);      /* never leave a half recipe behind */
+        fs_log("share: write of %s failed after %d bytes", dst, n);
+        fs_log_flush();
+        NotifyBox(1800, "Share: write failed");
+        return;
+      }
     }
-    FIO_CloseFile(in);
-    FIO_CloseFile(out);
     FIO_GetFileSize(dst, &size);
   }
 

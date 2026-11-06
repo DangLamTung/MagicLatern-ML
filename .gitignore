@@ -9,6 +9,7 @@ syntax: glob
 .*
 !.hgignore
 !.gitignore
+!.github
 .*.swp
 a.out
 *.exe
@@ -73,6 +74,9 @@ platform/build
 modules/build
 modules/*/build
 modules/*/*/build
+# hosttest binaries are built per machine; a tracked macOS one would be
+# "up to date" on a Linux runner and then fail to exec
+modules/film_sim/se/hosttest/lvgrade
 developer_guide/developer_guide.html
 developer_guide/developer_guide.pdf
 

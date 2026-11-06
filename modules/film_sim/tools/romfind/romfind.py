@@ -17,7 +17,20 @@ Three steps, each of which must be verified rather than assumed:
   func     disassemble backwards from a reference with objdump and find the
            nearest function prologue (push {..., lr}), which is the entry
 
-  ./romfind.py base  ROM1.BIN
+The load addresses are NOT to be guessed. platform/6D.116/consts.h declares
+them for this body:
+
+    ROM0_ADDR 0xF0000000   ROM0_SIZE 0x0080000   (8 MB)
+    ROM1_ADDR 0xF8000000   ROM1_SIZE 0x01000000  (16 MB)
+
+which is also exactly how src/debug.c dumps them. The `base` command exists
+for images from a body whose consts.h is unknown, and it can be fooled: a
+32-bit word that lands on a printable string proves only that the offset is
+dense with text, not that the base is right. It reported 0xFF000000 for
+ROM1 once and that was wrong.
+
+  ./romfind.py base  ROM1.BIN        (guess, and say why you trust it)
+  ./romfind.py xref  ROM1.BIN 0xF8000000 "halt all sockets"
   ./romfind.py xref  ROM1.BIN 0xFF000000 "halt all sockets"
   ./romfind.py func  ROM1.BIN 0xFF000000 0x00ba3bbb
 

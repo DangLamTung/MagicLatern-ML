@@ -5102,6 +5102,11 @@ static unsigned int fs_film_dir_sig(int *count_out)
   unsigned int sig = 2166136261u;
   int n = 0;
 
+  /* -1 means "could not read it", which is NOT the same as "no files":
+   * the card's filesystem is not mounted for the first seconds after boot,
+   * and a corrupt directory can also fail here. Reporting 0 for either makes
+   * the watcher believe every recipe was deleted. */
+  if (count_out) *count_out = -1;
   if (!file) return 0;
   dirent = FIO_FindFirstEx("ML/FILM", file);
   if (IS_ERROR(dirent)) { free(file); return 0; }
@@ -5137,12 +5142,9 @@ static void fs_film_watch_task(void *unused)
   unsigned int pending = 0;
 
   /* the catalogue was just loaded, so this is the state on disk */
-  {
-    int n0 = 0;
-    known = fs_film_dir_sig(&n0);
-    fs_log("watch: ML/FILM has %d recipe(s), watching for more", n0);
-    fs_log_flush();
-  }
+  known = fs_film_dir_sig(NULL);   /* no count: this runs before the card is
+                                    * necessarily mounted, and a false "0"
+                                    * here would be reported as fact */
 
   while (1) {
     unsigned int sig;
@@ -5152,7 +5154,23 @@ static void fs_film_watch_task(void *unused)
     if (fs_gui_active || fs_darkroom_active || fs_creator_active || fs_wb_active)
       continue;
 
-    sig = fs_film_dir_sig(NULL);
+    {
+      /* If the directory cannot be read, say nothing and try again: the card
+       * may not be mounted yet, and a replace-everything reload on a false
+       * reading is worse than waiting three more seconds. */
+      int n = 0;
+      unsigned int probe = fs_film_dir_sig(&n);
+      if (n < 0) {
+        static int told;
+        if (!told) {
+          told = 1;
+          fs_log("watch: ML/FILM not readable yet, will keep trying");
+          fs_log_flush();
+        }
+        continue;
+      }
+      sig = probe;
+    }
     if (sig != pending) {
       /* changed since last poll: not stable yet, wait for the next one */
       pending = sig;
@@ -5203,8 +5221,10 @@ static void fs_film_watch_task(void *unused)
     {
       int n = 0;
       fs_film_dir_sig(&n);
-      fs_log("watch: reloaded, %d recipe(s) on the card, %d stocks loaded",
-             n, film_active_count);
+      fs_log("watch: reloaded, %s recipe(s) on the card, %d stocks loaded",
+             n < 0 ? "unreadable" : "counted", film_active_count);
+      if (n >= 0)
+        fs_log("watch: %d .fs files in ML/FILM", n);
       fs_log_flush();
     }
   }
